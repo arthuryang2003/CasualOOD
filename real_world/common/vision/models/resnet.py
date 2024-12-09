@@ -8,7 +8,7 @@ import torch.nn as nn
 from torchvision import models
 # from torchvision.models.utils import load_state_dict_from_url
 from torch.hub import load_state_dict_from_url
-from torchvision.models.resnet import BasicBlock, Bottleneck, model_urls
+from torchvision.models.resnet import BasicBlock, Bottleneck
 import copy
 import torch
 
