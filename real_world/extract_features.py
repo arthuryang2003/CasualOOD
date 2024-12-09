@@ -9,18 +9,18 @@ import os.path as osp
 import torch
 import torch.nn as nn
 import torch.backends.cudnn as cudnn
-from torch.optim import SGD
-from torch.optim.lr_scheduler import LambdaLR
+# from torch.optim import SGD
+# from torch.optim.lr_scheduler import LambdaLR
 from torch.utils.data import DataLoader
-import torch.nn.functional as F
-
-from dalib.modules.domain_discriminator import DomainDiscriminator
-from dalib.adaptation.dann import DomainAdversarialLoss
-from common.utils.data import ForeverDataIterator
-from common.utils.metric import accuracy
-from common.utils.meter import AverageMeter, ProgressMeter
-from common.utils.logger import CompleteLogger
-from common.utils.analysis import collect_feature, tsne, a_distance
+# import torch.nn.functional as F
+#
+# from dalib.modules.domain_discriminator import DomainDiscriminator
+# from dalib.adaptation.dann import DomainAdversarialLoss
+# from common.utils.data import ForeverDataIterator
+# from common.utils.metric import accuracy
+# from common.utils.meter import AverageMeter, ProgressMeter
+# from common.utils.logger import CompleteLogger
+# from common.utils.analysis import collect_feature, tsne, a_distance
 
 import os
 sys.path.append('.')

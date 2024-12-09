@@ -14,8 +14,7 @@ from torch.optim.lr_scheduler import LambdaLR
 from torch.utils.data import DataLoader
 import torch.nn.functional as F
 
-from dalib.modules.domain_discriminator import DomainDiscriminator
-from dalib.adaptation.dann import DomainAdversarialLoss
+
 from common.modules.networks import iVAE
 from common.utils.data import ForeverDataIterator
 from common.utils.metric import accuracy
