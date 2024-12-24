@@ -145,6 +145,7 @@ def main(args: argparse.Namespace):
 def train(train_source_iter: ForeverDataIterator, train_target_iter: ForeverDataIterator,
           model,  optimizer: SGD,
           lr_scheduler: LambdaLR, epoch: int, args: argparse.Namespace, total_iter, backbone):
+    # 定义统计指标
     batch_time = AverageMeter('Time', ':5.2f')
     data_time = AverageMeter('Data', ':5.2f')
     recon_losses = AverageMeter('Rec', ':4.2f')
