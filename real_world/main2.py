@@ -5,6 +5,9 @@ import sys
 import argparse
 import shutil
 import os.path as osp
+import os
+sys.path.append('.')
+
 import torch
 import torch.nn as nn
 import torch.backends.cudnn as cudnn
@@ -12,6 +15,8 @@ from torch.optim import SGD
 from torch.optim.lr_scheduler import LambdaLR
 from torch.utils.data import DataLoader
 import torch.nn.functional as F
+import wandb
+
 import utils
 from common.modules.networks import iVAE
 from common.utils.data import ForeverDataIterator
@@ -54,8 +59,10 @@ def main(args: argparse.Namespace):
         torch.manual_seed(args.seed)
         cudnn.deterministic = True
         warnings.warn('You have chosen to seed training. '
-                      'This will turn on the CUDNN deterministic setting, which can slow down your training considerably! '
-                      'You may see unexpected behavior when restarting from checkpoints.')
+                      'This will turn on the CUDNN deterministic setting, '
+                      'which can slow down your training considerably! '
+                      'You may see unexpected behavior when restarting '
+                      'from checkpoints.')
 
     cudnn.benchmark = True
 
@@ -92,6 +99,13 @@ def main(args: argparse.Namespace):
     if args.phase != 'train':
         checkpoint = torch.load(logger.get_checkpoint_path('best'), map_location='cpu')
         unstable_model.load_state_dict(checkpoint)
+
+    # 初始化 wandb 监控
+    wandb.init(
+        project="domain_adaptation_partial_identifiability",
+        group=args.name,
+    )
+    wandb.config.update(args)
 
     # 测试阶段
     if args.phase == 'test':
@@ -134,8 +148,26 @@ def main(args: argparse.Namespace):
                 shutil.copy(logger.get_checkpoint_path('latest'), logger.get_checkpoint_path('best'))
             best_acc1 = max(acc1, best_acc1)
 
+            # 使用 wandb 记录验证准确率
+            wandb.log({"Val Acc": acc1})
+            
+            # 额外的测试（如果是 DomainNet 数据集）
+            if args.data.lower() == "domainnet":
+                acc1 = utils.validate(test_loader, unstable_model, args, device)
+            wandb.log({"Test Acc": acc1})
+
+            message = '(epoch %d): Test Acc@1 %.3f' % (epoch+1, acc1)
+            print(message)
+            with open('%s/test.txt' % args.log, 'a') as record:
+                record.write(message + '\n')
+
         print("最佳验证准确率 = {:3.1f}".format(best_acc1))
-        return
+
+    # 最后在测试集上评估最佳模型
+    unstable_model.load_state_dict(torch.load(logger.get_checkpoint_path('best')))
+    acc1 = utils.validate(test_loader, unstable_model, args, device)
+    print(f"最终最佳测试准确率 = {acc1:.3f}")
+    logger.close()
 
 def train_one_epoch(train_source_loader, train_target_loader, stable_model, unstable_model, optimizer, epoch, args, total_iter, backbone):
     stable_model.train()
