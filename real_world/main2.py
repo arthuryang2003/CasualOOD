@@ -185,7 +185,7 @@ def main(args: argparse.Namespace):
 
     best_acc3 = 0.
     total_iter = 0
-    for epoch in range(int(args.epochs/2)):
+    for epoch in range(args.finetune_epochs):
 
         # 训练不稳定特征模型
         finetune_unstable_with_pseudo_labels(stable_model, unstable_model, train_target_iter,
@@ -289,6 +289,8 @@ if __name__ == '__main__':
                         metavar='N', help='print frequency (default: 100)')
     parser.add_argument('-e', '--eval-freq', default=100, type=int,
                         metavar='N', help='print frequency (default: 100)')
+    parser.add_argument('--finetune_epochs', default=20, type=int, metavar='N',
+                        help='number of finetune epochs to run')
 
     # 随机种子和评估选项
     parser.add_argument('--seed', default=5, type=int,
@@ -339,7 +341,7 @@ if __name__ == '__main__':
     args.c_dim = args.z_dim - args.s_dim
 
     wandb.init(
-        project="domain_adaptation_partial_identifiability",
+        project="CasualOOD",
         group=args.name,
     )
     wandb.config.update(args)
