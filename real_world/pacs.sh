@@ -8,6 +8,7 @@ WANDB_MODE=online CUDA_VISIBLE_DEVICES=${device[0]} python main2.py --root=../..
 -d PACS -s C,P,A -t S -a resnet18 \
 --name=PACS_test \
 --z_dim=64 --s_dim=${s_dim[0]} \
+--C_max=15 --beta=1 --lambda_vae=${lambda_vae[0]} --lambda_ent=0.1 \
 -i=1200 \
 --seed=${seed[i]} \
 --epochs=40

@@ -70,8 +70,8 @@ def train_stable(train_source_iter: ForeverDataIterator,
             domain_id = id
             is_target = domain_id == args.n_domains - 1  # 判断是否为目标域
 
-            if is_target:
-                continue  # 跳过目标域的训练
+            if not is_target:
+                continue
 
             # 获取当前域的样本数据
             index = d_all == id  # 获取当前域的样本
@@ -80,27 +80,37 @@ def train_stable(train_source_iter: ForeverDataIterator,
             d_dom = d_all[index]
 
             # 提取稳定特征（content）
-            content, _ = extract_features(model, img_dom, d_dom)  # 提取不变特征
+            content, _ = extract_features(model, img_dom, d_dom,is_target)  # 提取不变特征
 
             # 使用稳定特征进行分类
             logits = model.stable_classifier(content)  # 分类
 
-            # 计算交叉熵损失
-            loss = F.cross_entropy(logits, label_dom)
+            if not is_target:  # only source
+                # 计算交叉熵损失
+                losses_cls.append(F.cross_entropy(logits, label_dom))
+                y_s.append(logits)
+                labels_s.append(label_dom)
+            else:
+                y_t = logits  # 如果是目标域，保存logit以便计算目标域的损失
 
-            # 更新统计指标
-            acc = accuracy(logits, label_dom)[0]
-            cls_losses.update(loss.item(), img_dom.size(0))
-            cls_accs.update(acc.item(), img_dom.size(0))
+        # 分类损失
+        mean_loss_cls = torch.stack(losses_cls, 0).mean()
 
+        # 总损失 = 分类损失 + VAE损失 + 熵损失
+        loss = mean_loss_cls
 
-            # 反向传播并更新权重
-            optimizer.zero_grad()
-            loss.backward()
-            optimizer.step()
+        # 合并源域标签和预测结果，计算分类准确率
+        y_s = torch.cat(y_s, 0)
+        labels_s = torch.cat(labels_s, 0)
+        cls_acc = accuracy(y_s, labels_s)[0]
 
-            # 更新学习率
-            lr_scheduler.step()
+        cls_losses.update(mean_loss_cls.item(), y_s.size(0))  # 更新分类损失
+        cls_accs.update(cls_acc.item(), y_s.size(0))  # 更新分类准确率
+
+        # 反向传播并更新权重
+        optimizer.zero_grad()
+        loss.backward()
+        optimizer.step()
 
 
         # 计时
@@ -177,51 +187,58 @@ def train_unstable(train_source_iter: ForeverDataIterator,
 
         # 初始化各个损失项的列表
         losses_cls = []
-        losses_kl = []
         z_all = []  # 保存所有的潜变量z
         y_t = None
         y_s = []  # 用于保存源域的logits
         labels_s = []  # 用于保存源域的标签
-        x_all = []  # 用于保存源域和目标域的特征
 
         # 遍历每个域，针对每个源域进行训练
         for id in range(args.n_domains):  # 遍历每个源域
             domain_id = id
             is_target = domain_id == args.n_domains - 1  # 判断是否为目标域
 
-            if is_target:
-                continue
 
-            else:
-                # 获取当前域的样本数据
-                index = d_all == id  # 获取当前域的样本
-                label_dom = label_all[index]
-                img_dom = img_all[index]
-                d_dom = d_all[index]
+            # 获取当前域的样本数据
+            index = d_all == id  # 获取当前域的样本
+            label_dom = label_all[index]
+            img_dom = img_all[index]
+            d_dom = d_all[index]
 
-                # 提取不稳定特征（style）
-                _, style = extract_features(model, img_dom, d_dom)  # 提取可变特征
+            # 提取不稳定特征（style）
+            _, style = extract_features(model, img_dom, d_dom,is_target)  # 提取可变特征
 
-                # 使用不稳定特征进行分类
-                logits = model.unstable_classifier(style)  # 分类
+            # 使用不稳定特征进行分类
+            logits = model.unstable_classifier(style)  # 分类
 
+            if not is_target:  # only source
                 # 计算交叉熵损失
-                loss = F.cross_entropy(logits, label_dom)
+                losses_cls.append(F.cross_entropy(logits, label_dom))
+                y_s.append(logits)
+                labels_s.append(label_dom)
+            else:
+                y_t = logits# 如果是目标域，保存logit以便计算目标域的损失
 
-                # 更新统计指标
-                acc = accuracy(logits, label_dom)[0]
-                cls_losses.update(loss.item(), img_dom.size(0))
-                cls_accs.update(acc.item(), img_dom.size(0))
+        # 分类损失
+        mean_loss_cls = torch.stack(losses_cls, 0).mean()
 
-                # 反向传播并更新权重
-                optimizer.zero_grad()
-                loss.backward()
-                optimizer.step()
+        # 总损失 = 分类损失 + VAE损失 + 熵损失
+        loss = mean_loss_cls
 
-                # 更新学习率
-                lr_scheduler.step()
+        # 合并源域标签和预测结果，计算分类准确率
+        y_s = torch.cat(y_s, 0)
+        labels_s = torch.cat(labels_s, 0)
+        cls_acc = accuracy(y_s, labels_s)[0]
 
+        cls_losses.update(mean_loss_cls.item(), y_s.size(0))  # 更新分类损失
+        cls_accs.update(cls_acc.item(), y_s.size(0))  # 更新分类准确率
 
+        # 反向传播并更新权重
+        optimizer.zero_grad()
+        loss.backward()
+        optimizer.step()
+
+        # 更新学习率
+        lr_scheduler.step()
 
         # 计时
         batch_time.update(time.time() - end)
@@ -247,12 +264,11 @@ def train_unstable(train_source_iter: ForeverDataIterator,
 
             # 打印进度并记录日志
             progress.display(i)
+
             wandb.log({
-                "Unstable Model Train Loss": cls_losses.avg,
+                "Unstable Model Train Loss": mean_loss_cls.avg,
                 "Unstable Model Train Accuracy": cls_accs.avg,
                 "Target Domain Accuracy": cls_t_acc.item(),
-                "Train Source Acc": cls_accs.avg,
-                "Train Source Cls Loss": cls_losses.avg,
             })
 
 
