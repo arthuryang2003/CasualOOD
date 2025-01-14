@@ -27,28 +27,116 @@ from common.utils.analysis import collect_feature, tsne, a_distance
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-# 定义伪标签生成函数
-def generate_pseudo_labels(test_loader, stable_model, device):
-    pseudo_labels = []
-    with torch.no_grad():
-        for X_batch, _ in test_loader:
-            X_S = X_batch[:, :args.z_dim - args.style_dim].to(device)
-            Y_hat = stable_model(X_S)  # 使用稳定特征生成伪标签
-            pseudo_labels.append((X_batch, torch.argmax(Y_hat, dim=1)))  # 多类情况下使用argmax生成伪标签
-    return pseudo_labels
+os.environ["CUDA_VISIBLE_DEVICES"] = "0"
 
-# 定义伪标签微调函数
-def pseudo_label_finetune(test_loader, unstable_model, stable_model, optimizer, criterion, device):
-    unstable_model.train()
-    pseudo_labels = generate_pseudo_labels(test_loader, stable_model, device)
-    for X_batch, Y_hat in pseudo_labels:
-        X_U = X_batch[:, args.z_dim - args.style_dim:].to(device)  # 使用可变特征 X_U
-        Y_hat = Y_hat.to(device)
-        optimizer.zero_grad()
-        outputs = unstable_model(X_U)
-        loss = criterion(outputs, Y_hat)  # 使用伪标签进行损失计算
-        loss.backward()
-        optimizer.step()
+def extract_features(model, x, u):
+    """
+    从输入数据中提取解耦的内容（content）和风格（style）特征。
+    """
+    if u is not None:
+        u = u.to(device)  # 如果 u 不为空，将其移动到正确的设备上
+
+    # 确保数据在传入 backbone 前被展平
+    x = model.backbone(x)
+    x = x.view(x.size(0), -1)  # 展平为 [batch_size, features]
+
+    # 使用模型进行编码，提取特征
+    z, _, _, _, _, _ = model.encode(x, u)
+    content = z[:, :model.c_dim]  # 不变特征
+    style = z[:, model.c_dim:]   # 可变特征
+    return content, style
+
+def combined_inference(stable_model, unstable_model, test_loader,num_classes):
+    # 初始化先验分布和混淆矩阵
+    PY = torch.zeros(num_classes).to(device)  # 类别先验分布
+    e_matrix = torch.zeros(num_classes, num_classes).to(device)  # 混淆矩阵
+
+    # 第一遍：计算混淆矩阵和先验分布
+    stable_model.eval()
+    unstable_model.eval()
+    with torch.no_grad():
+        for batch_idx, batch in enumerate(test_loader):
+            # 解包数据，只取前两个（data 和 labels）
+            data, labels = batch[:2]
+            data = data.to(device)
+            labels = labels.to(device)
+            if labels.dim() == 1:
+                labels = F.one_hot(labels, num_classes=num_classes).float()
+
+            # compute output
+            u = torch.ones([len(data)]).long().to(device)
+            # 提取稳定特征和不稳定特征
+            stable_features, _ = extract_features(stable_model, data, u)  # 提取稳定特征
+            _, unstable_features = extract_features(unstable_model, data, u)  # 提取不稳定特征
+
+            # 稳定模型预测（使用 sigmoid）
+            Y_pred_stable = torch.sigmoid(stable_model.stable_classifier(stable_features))
+            Y_pred_stable_hard = (Y_pred_stable > 0.5).float()
+
+            # 更新先验分布
+            PY += labels.sum(dim=0)
+
+            e_matrix += torch.matmul(labels.T, Y_pred_stable_hard)
+
+            # # 更新混淆矩阵
+            # for k in range(num_classes):
+            #     for k_prime in range(num_classes):
+            #         e_matrix[k, k_prime] += (
+            #             (labels[:, k_prime] * Y_pred_stable_hard[:, k]).sum().item()
+            #         )
+
+    # 归一化混淆矩阵和先验分布
+    e_matrix = e_matrix / e_matrix.sum(dim=0, keepdim=True)
+    PY = PY / PY.sum()
+
+    # 第二遍：使用调整后的不稳定模型预测
+    correct = 0
+    total = 0
+    OOD = 0
+    with torch.no_grad():
+        for batch_idx, batch in enumerate(test_loader):
+            # 解包数据，只取前两个（data 和 labels）
+            data, labels = batch[:2]
+            data = data.to(device)
+            labels = labels.to(device)
+            # 转换为 one-hot 编码
+            if labels.dim() == 1:
+                labels = F.one_hot(labels, num_classes=num_classes).float()
+
+            u = torch.ones([len(data)]).long().to(device)
+            # 提取稳定特征和不稳定特征
+            stable_features, _ = extract_features(stable_model, data, u)  # 提取稳定特征
+            _, unstable_features = extract_features(unstable_model, data, u)  # 提取不稳定特征
+
+
+            # 稳定模型预测（sigmoid 输出概率）
+            Y_stable = torch.sigmoid(stable_model.stable_classifier(stable_features))
+            Xlogit = torch.logit(Y_stable, eps=1e-6)
+
+            # 不稳定模型预测并调整（sigmoid 输出 + 偏差校正）
+            Y_unstable = torch.sigmoid(unstable_model.unstable_classifier(unstable_features))
+            Y_unstable_corrected = torch.matmul(Y_unstable, torch.inverse(e_matrix))
+            Y_unstable_corrected = torch.clamp(Y_unstable_corrected, min=0, max=1)
+            Ulogit = torch.logit(Y_unstable_corrected, eps=1e-6)
+
+            # 联合预测：组合稳定模型和不稳定模型的对数几率
+            combined_logit = Xlogit + Ulogit - torch.log(PY + 1e-6)
+
+            # 转换为概率分布
+            predict = torch.sigmoid(combined_logit)
+
+
+            # 转换为硬标签（单标签分类选择最大概率）
+            predicted = torch.argmax(predict, dim=1)
+            correct += (predicted == torch.argmax(labels, dim=1)).sum().item()
+            total += labels.size(0)
+
+    # 输出准确率
+
+    accuracy = correct / total
+    return accuracy
+
+
 
 def main(args: argparse.Namespace):
     logger = CompleteLogger(args.log, args.phase)
@@ -72,156 +160,642 @@ def main(args: argparse.Namespace):
                                                 norm_mean=args.norm_mean, norm_std=args.norm_std)
     val_transform = utils.get_val_transform(args.val_resizing, resize_size=args.resize_size,
                                             norm_mean=args.norm_mean, norm_std=args.norm_std)
+    print("train_transform: ", train_transform)
+    print("val_transform: ", val_transform)
 
     train_source_dataset, train_target_dataset, val_dataset, test_dataset, args.num_classes, args.class_names = \
         utils.get_dataset(args.data, args.root, args.source, args.target, train_transform, val_transform)
     train_source_loader = DataLoader(train_source_dataset, batch_size=(args.n_domains-1)*args.train_batch_size,
-                                     num_workers=args.workers, drop_last=True, shuffle=True)
+                                     num_workers=args.workers, drop_last=True,
+                                     #sampler=_make_balanced_sampler(train_source_dataset.domain_ids)
+                                     shuffle=True,
+                                     )
     train_target_loader = DataLoader(train_target_dataset, batch_size=args.batch_size,
-                                     shuffle=True, num_workers=args.workers, drop_last=True)
+                                     shuffle=True, num_workers=args.workers, drop_last=True,
+                                     )
     val_loader = DataLoader(val_dataset, batch_size=args.batch_size, shuffle=False, num_workers=args.workers)
     test_loader = DataLoader(test_dataset, batch_size=args.batch_size, shuffle=False, num_workers=args.workers)
 
     train_source_iter = ForeverDataIterator(train_source_loader)
     train_target_iter = ForeverDataIterator(train_target_loader)
 
-    # 创建稳定模型和不稳定模型
+    # 通过目标数据集计算类别数量
+    num_classes = len(set(train_source_dataset.datasets[0].classes))
+
+    print(f"num_classes: {num_classes}")
+
     print("=> using model '{}'".format(args.arch))
     backbone = utils.get_model(args.arch, pretrain=not args.scratch)
-    stable_model = iVAE(args, backbone_net=backbone).to(device)  # 用于提取不变特征
-    unstable_model = iVAE(args, backbone_net=backbone).to(device)  # 用于提取可变特征
 
-    # 定义优化器和学习率调度器
-    optimizer = SGD(unstable_model.get_parameters(), lr=args.lr, momentum=args.momentum, weight_decay=args.weight_decay, nesterov=True)
-    lr_scheduler = LambdaLR(optimizer, lambda x:  args.lr * (1. + args.lr_gamma * float(x)) ** (-args.lr_decay))
+    # 初始化稳定模型和不稳定模型
+    stable_model = iVAE(args, backbone_net=backbone).to(device)  
+    unstable_model = iVAE(args, backbone_net=backbone).to(device) 
 
-    # 载入最佳检查点
+    # 稳定模型的优化器和学习率调度器
+    stable_optimizer = SGD(stable_model.get_parameters(),
+                        lr=args.lr, momentum=args.momentum, weight_decay=args.weight_decay, nesterov=True)
+    print(stable_optimizer.param_groups[0]['lr'], ' *** lr')
+    stable_lr_scheduler = LambdaLR(stable_optimizer, lambda x: args.lr * (1. + args.lr_gamma * float(x)) ** (-args.lr_decay))
+    print(stable_optimizer.param_groups[0]['lr'], ' *** lr')
+
+    # 不稳定模型的优化器和学习率调度器
+    unstable_optimizer = SGD(unstable_model.get_parameters(),
+                            lr=args.lr, momentum=args.momentum, weight_decay=args.weight_decay, nesterov=True)
+    print(unstable_optimizer.param_groups[0]['lr'], ' *** lr')
+    unstable_lr_scheduler = LambdaLR(unstable_optimizer, lambda x: args.lr * (1. + args.lr_gamma * float(x)) ** (-args.lr_decay))
+    print(unstable_optimizer.param_groups[0]['lr'], ' *** lr')
+
+
+    test_logger = '%s/test.txt' % (args.log)
+
     if args.phase != 'train':
-        checkpoint = torch.load(logger.get_checkpoint_path('best'), map_location='cpu')
-        unstable_model.load_state_dict(checkpoint)
+        stable_model.load_state_dict(torch.load(logger.get_checkpoint_path('best_stable')))
+        unstable_model.load_state_dict(torch.load(logger.get_checkpoint_path('best_unstable')))
 
-    # 初始化 wandb 监控
+    if args.phase == 'test':
+
+        combined_acc = combined_inference(stable_model, unstable_model,
+                                          test_loader,num_classes)
+        print("Final Combined Model Test Acc = {:3.1f}".format(combined_acc))
+        return
+
+    best_acc1 = 0.
+    total_iter = 0
+    for epoch in range(args.epochs):
+        # 训练稳定特征模型
+        train_stable(train_source_iter, train_target_iter, stable_model, stable_optimizer, stable_lr_scheduler, epoch, args, total_iter)
+
+        total_iter += args.iters_per_epoch
+
+        # 验证稳定模型
+        acc1 = utils.validate(val_loader, stable_model, args, device)
+        print(' * Stable Model Val Acc@1 %.3f' % (acc1))
+        wandb.log({"Stable Model Val Acc": acc1})
+
+        wandb.log({"Stable Model Test Acc": acc1})
+        message = '(epoch %d): Stable Model Test Acc@1 %.3f' % (epoch + 1, acc1)
+        print(message)
+        record = open(test_logger, 'a')
+        record.write(message + '\n')
+        record.close()
+
+        # remember best acc@1 and save checkpoint
+        torch.save(stable_model.state_dict(), logger.get_checkpoint_path('latest_stable'))
+
+        if acc1 > best_acc1:
+            shutil.copy(logger.get_checkpoint_path('latest_stable'), logger.get_checkpoint_path('best_stable'))
+        best_acc1 = max(acc1, best_acc1)
+        wandb.run.summary["best_accuracy"] = best_acc1
+
+    print("best_acc1 = {:3.1f}".format(best_acc1))
+    # 加载最佳稳定模型并评估
+    stable_model.load_state_dict(torch.load(logger.get_checkpoint_path('best_stable')))
+    acc1 = utils.validate(test_loader, stable_model, args, device)
+    print("Final Best Stable Model test_acc1 = {:3.1f}".format(acc1))
+
+    best_acc2 = 0.
+    total_iter = 0
+    for epoch in range(args.epochs):
+
+        # 训练不稳定特征模型
+        train_unstable(train_source_iter, train_target_iter, unstable_model, unstable_optimizer, unstable_lr_scheduler, epoch, args, total_iter)
+
+        total_iter += args.iters_per_epoch
+
+        # 验证不稳定模型
+        acc2 = utils.validate(val_loader, unstable_model, args, device)
+        print(' * Unstable Model Val Acc@1 %.3f' % (acc2))
+        wandb.log({"Unstable Model Val Acc": acc2})
+
+        wandb.log({"Unstable Model Test Acc": acc2})
+        message = '(epoch %d): Unstable Model Test Acc@2 %.3f' % (epoch + 1, acc2)
+        print(message)
+        record = open(test_logger, 'a')
+        record.write(message + '\n')
+        record.close()
+
+        # remember best acc@1 and save checkpoint
+        torch.save(unstable_model.state_dict(), logger.get_checkpoint_path('latest_unstable'))
+
+        if acc2 > best_acc2:
+            shutil.copy(logger.get_checkpoint_path('latest_unstable'), logger.get_checkpoint_path('best_unstable'))
+        best_acc2= max(acc2, best_acc2)
+        wandb.run.summary["best_accuracy"] = best_acc2
+
+    print("best_acc2 = {:3.1f}".format(best_acc2))
+    # evaluate on test set
+
+    # 加载最佳稳定模型并评估
+    unstable_model.load_state_dict(torch.load(logger.get_checkpoint_path('best_unstable')))
+    acc2 = utils.validate(test_loader, unstable_model, args, device)
+    print("Final Best Unstable Model test_acc2 = {:3.1f}".format(acc2))
+
+    best_acc3 = 0.
+    total_iter = 0
+    for epoch in range(int(args.epochs/2)):
+
+        # 训练不稳定特征模型
+        finetune_unstable_with_pseudo_labels(stable_model, unstable_model, train_target_iter,
+         unstable_optimizer, unstable_lr_scheduler, epoch, args, total_iter)
+
+        total_iter += args.iters_per_epoch
+
+        # 验证不稳定模型
+        acc3 = utils.validate(val_loader, unstable_model, args, device)
+        print(' * Unstable Model Finetune Val  Acc@3 %.3f' % (acc3))
+        wandb.log({"Unstable Model Finetune Val Acc": acc3})
+
+        wandb.log({"Unstable Model Finetune Test Acc": acc3})
+        message = '(epoch %d): Unstable Model Finetune Test Acc@3 %.3f' % (epoch + 1, acc3)
+        print(message)
+        record = open(test_logger, 'a')
+        record.write(message + '\n')
+        record.close()
+
+        # remember best acc@1 and save checkpoint
+        torch.save(unstable_model.state_dict(), logger.get_checkpoint_path('latest_unstable'))
+
+        if acc3 > best_acc3:
+            shutil.copy(logger.get_checkpoint_path('latest_unstable'), logger.get_checkpoint_path('best_unstable'))
+        best_acc3= max(acc3, best_acc3)
+        wandb.run.summary["best_accuracy"] = best_acc3
+
+    print("best_acc3 = {:3.1f}".format(best_acc3))
+    # evaluate on test set
+
+    # 加载最佳稳定模型并评估
+    unstable_model.load_state_dict(torch.load(logger.get_checkpoint_path('best_unstable')))
+    acc3 = utils.validate(test_loader, unstable_model, args, device)
+    print("Final Best Unstable Model After Fintune test_acc3 = {:3.1f}".format(acc3))
+
+    # 评估组合模型
+
+    combined_acc= combined_inference(stable_model, unstable_model, test_loader, num_classes)
+
+    # 分别打印准确率和 OOD
+    print("Final Combined Model Test Acc = {:3.1f}".format(combined_acc))
+
+    logger.close()
+
+def train_stable(train_source_iter: ForeverDataIterator, 
+                 train_target_iter: ForeverDataIterator,
+                 model, optimizer: SGD, lr_scheduler: LambdaLR,
+                 epoch: int, args: argparse.Namespace, total_iter):
+    # 定义统计指标
+    batch_time = AverageMeter('Time', ':5.2f')
+    data_time = AverageMeter('Data', ':5.2f')
+    cls_losses = AverageMeter('Cls', ':4.2f')  # 分类损失
+    cls_accs = AverageMeter('Cls Acc', ':3.1f')  # 分类准确率
+    val_accs = AverageMeter('Val Acc', ':3.1f') # 验证准确率
+    progress = ProgressMeter(
+        args.iters_per_epoch,
+        [batch_time, data_time, cls_losses, cls_accs],
+        prefix="Stable Model Epoch: [{}]".format(epoch)
+    )
+
+    # 切换到训练模式
+    model.train()
+    end = time.time()
+
+    for i in range(args.iters_per_epoch):
+        total_iter += 1
+        model.train()
+
+        # 计时并加载数据
+        data_time.update(time.time() - end)
+        img_s, labels_s, d_s, _ = next(train_source_iter)
+        img_t, labels_t, d_t, _ = next(train_target_iter)
+
+        # 将图像和标签数据移至GPU
+        img_s = img_s.to(device)
+        img_t = img_t.to(device)
+        labels_s = labels_s.to(device)
+        labels_t = labels_t.to(device)
+
+        # 将源域和目标域的图像合并
+        img_all = torch.cat([img_s, img_t], 0)
+        d_all = torch.cat([d_s, d_t], 0).to(device)
+        label_all = torch.cat([labels_s, labels_t], 0)
+
+        # 初始化各个损失项的列表
+        losses_cls = []
+        losses_kl = []
+        z_all = []# 保存所有的潜变量z
+        y_t = None
+        y_s = [] # 用于保存源域的logits
+        labels_s = []# 用于保存源域的标签
+        x_all = []# 用于保存源域和目标域的特征
+
+        # 遍历每个域，针对每个源域进行训练
+        for id in range(args.n_domains):  # 遍历每个源域
+            domain_id = id
+            is_target = domain_id == args.n_domains - 1  # 判断是否为目标域
+
+            if is_target:
+                continue  # 跳过目标域的训练
+
+            # 获取当前域的样本数据
+            index = d_all == id  # 获取当前域的样本
+            label_dom = label_all[index] if not is_target else None
+            img_dom = img_all[index]
+            d_dom = d_all[index]
+
+            # 提取稳定特征（content）
+            content, _ = extract_features(model, img_dom, d_dom)  # 提取不变特征
+
+            # 使用稳定特征进行分类
+            logits = model.stable_classifier(content)  # 分类
+
+            # 计算交叉熵损失
+            loss = F.cross_entropy(logits, label_dom)
+
+            # 反向传播并更新权重
+            optimizer.zero_grad()
+            loss.backward()
+            optimizer.step()
+
+            # 更新学习率
+            lr_scheduler.step()
+
+            # 更新统计指标
+            acc = accuracy(logits, label_dom)[0]
+            cls_losses.update(loss.item(), img_dom.size(0))
+            cls_accs.update(acc.item(), img_dom.size(0))
+
+        # 计时
+        batch_time.update(time.time() - end)
+        end = time.time()
+
+        # 每隔一定频率打印进度信息
+        if i % args.print_freq == 0:
+            # 切换到评估模式
+            model.eval()
+
+            # 提取目标域数据
+            img_t = img_all[d_all == args.n_domains - 1]
+            labels_t = label_all[d_all == args.n_domains - 1]
+
+            with torch.no_grad():
+                # 使用稳定特征模型进行预测
+                y = model(img_t, d_all[d_all == args.n_domains - 1])
+                cls_t_acc = accuracy(y, labels_t)[0]  # 计算目标域准确率
+                val_accs.update(cls_t_acc.item(), img_t.size(0))
+
+            # 切换回训练模式
+            model.train()
+
+            # 打印进度并记录日志
+            progress.display(i)
+            wandb.log({
+                "Stable Model Train Loss": cls_losses.avg,
+                "Stable Model Train Accuracy": cls_accs.avg,
+                "Target Domain Accuracy": cls_t_acc.item(),
+                "Train Source Acc": cls_accs.avg,
+                "Train Source Cls Loss": cls_losses.avg,
+            })
+
+def train_unstable(train_source_iter: ForeverDataIterator, 
+                   train_target_iter: ForeverDataIterator,
+                   model, optimizer: SGD, lr_scheduler: LambdaLR,
+                   epoch: int, args: argparse.Namespace, total_iter):
+    # 定义统计指标
+    batch_time = AverageMeter('Time', ':5.2f')
+    data_time = AverageMeter('Data', ':5.2f')
+    cls_losses = AverageMeter('Cls', ':4.2f')  # 分类损失
+    cls_accs = AverageMeter('Cls Acc', ':3.1f')  # 分类准确率
+    val_accs = AverageMeter('Val Acc', ':3.1f')  # 验证准确率
+    progress = ProgressMeter(
+        args.iters_per_epoch,
+        [batch_time, data_time, cls_losses, cls_accs],
+        prefix="Unstable Model Epoch: [{}]".format(epoch)
+    )
+
+    # 切换到训练模式
+    model.train()
+    end = time.time()
+
+    for i in range(args.iters_per_epoch):
+        total_iter += 1
+        model.train()
+
+        # 计时并加载数据
+        data_time.update(time.time() - end)
+        img_s, labels_s, d_s, _ = next(train_source_iter)
+        img_t, labels_t, d_t, _ = next(train_target_iter)
+
+        # 将图像和标签数据移至GPU
+        img_s = img_s.to(device)
+        img_t = img_t.to(device)
+        labels_s = labels_s.to(device)
+        labels_t = labels_t.to(device)
+
+        # 将源域和目标域的图像合并
+        img_all = torch.cat([img_s, img_t], 0)
+        d_all = torch.cat([d_s, d_t], 0).to(device)
+        label_all = torch.cat([labels_s, labels_t], 0)
+
+        # 初始化各个损失项的列表
+        losses_cls = []
+        losses_kl = []
+        z_all = []  # 保存所有的潜变量z
+        y_t = None
+        y_s = []  # 用于保存源域的logits
+        labels_s = []  # 用于保存源域的标签
+        x_all = []  # 用于保存源域和目标域的特征
+
+        # 遍历每个域，针对每个源域进行训练
+        for id in range(args.n_domains):  # 遍历每个源域
+            domain_id = id
+            is_target = domain_id == args.n_domains - 1  # 判断是否为目标域
+
+            if is_target:
+                continue
+
+            else:
+                # 获取当前域的样本数据
+                index = d_all == id  # 获取当前域的样本
+                label_dom = label_all[index] if not is_target else None
+                img_dom = img_all[index]
+                d_dom = d_all[index]
+
+                # 提取不稳定特征（style）
+                _, style = extract_features(model, img_dom, d_dom)  # 提取可变特征
+
+                # 使用不稳定特征进行分类
+                logits = model.unstable_classifier(style)  # 分类
+
+                # 计算交叉熵损失
+                loss = F.cross_entropy(logits, label_dom)
+
+                # 反向传播并更新权重
+                optimizer.zero_grad()
+                loss.backward()
+                optimizer.step()
+
+                # 更新学习率
+                lr_scheduler.step()
+
+                # 更新统计指标
+                acc = accuracy(logits, label_dom)[0]
+                cls_losses.update(loss.item(), img_dom.size(0))
+                cls_accs.update(acc.item(), img_dom.size(0))
+
+        # 计时
+        batch_time.update(time.time() - end)
+        end = time.time()
+
+        # 每隔一定频率打印进度信息
+        if i % args.print_freq == 0:
+            # 切换到评估模式
+            model.eval()
+
+            # 提取目标域数据
+            img_t = img_all[d_all == args.n_domains - 1]
+            labels_t = label_all[d_all == args.n_domains - 1]
+
+            with torch.no_grad():
+                # 使用不稳定特征模型进行预测
+                y = model(img_t, d_all[d_all == args.n_domains - 1])
+                cls_t_acc = accuracy(y, labels_t)[0]  # 计算目标域准确率
+                val_accs.update(cls_t_acc.item(), img_t.size(0))
+
+            # 切换回训练模式
+            model.train()
+
+            # 打印进度并记录日志
+            progress.display(i)
+            wandb.log({
+                "Unstable Model Train Loss": cls_losses.avg,
+                "Unstable Model Train Accuracy": cls_accs.avg,
+                "Target Domain Accuracy": cls_t_acc.item(),
+                "Train Source Acc": cls_accs.avg,
+                "Train Source Cls Loss": cls_losses.avg,
+            })
+
+def finetune_unstable_with_pseudo_labels(stable_model, unstable_model, train_target_iter, 
+                                        optimizer, lr_scheduler, epoch, args, total_iter):
+    # 定义统计指标
+    batch_time = AverageMeter('Time', ':5.2f')
+    data_time = AverageMeter('Data', ':5.2f')
+    cls_losses = AverageMeter('Cls', ':4.2f')  # 分类损失
+    cls_accs = AverageMeter('Cls Acc', ':3.1f')  # 分类准确率
+    progress = ProgressMeter(
+        args.iters_per_epoch,
+        [batch_time, data_time, cls_losses, cls_accs],
+        prefix="Unstable Model Fine-tuning Epoch: [{}]".format(epoch)
+    )
+
+    # 切换到训练模式
+    unstable_model.train()
+    end = time.time()
+
+    # 获取目标域数据并选择10%用于微调
+    img_t_all, labels_t_all, d_t_all, _ = next(train_target_iter)
+    img_t_all = img_t_all.to(device)
+    labels_t_all = labels_t_all.to(device)
+    d_t_all = d_t_all.to(device)
+
+    # 随机选取目标域数据的10%作为训练数据
+    target_train_size = int(0.1 * len(img_t_all))  # 10%的数据用于训练
+    target_train_idx = torch.randperm(len(img_t_all))[:target_train_size]
+    target_train_data = img_t_all[target_train_idx]
+
+    target_train_labels = labels_t_all[target_train_idx]
+
+    # 剩下的90%数据用于验证
+    target_val_data = img_t_all[target_train_size:]
+    target_val_labels = labels_t_all[target_train_size:]
+    target_val_domains = d_t_all[target_train_size:] # 提取验证数据对应的域信息
+
+    # 提取目标域数据
+    target_val_data = target_val_data.to(device)
+    target_val_labels = target_val_labels.to(device)
+    target_val_domains = target_val_domains.to(device)
+
+    # 使用稳定模型生成伪标签
+    stable_model.eval()
+    with torch.no_grad():
+        # 获取稳定模型的输出并生成伪标签
+        stable_logits = stable_model.stable_classifier(extract_features(stable_model, target_train_data, d_t_all[target_train_idx])[0])
+        pseudo_labels = torch.argmax(stable_logits, dim=1)
+
+    # 微调不稳定模型
+    unstable_model.train()
+
+    for i in range(args.iters_per_epoch):
+        total_iter += 1
+        unstable_model.train()
+
+        # 计时并加载数据
+        data_time.update(time.time() - end)
+        img_t, labels_t, d_t, _ = next(train_target_iter)
+        img_t = img_t.to(device)
+        labels_t = labels_t.to(device)
+
+        # 只使用从目标域选出的训练数据（10%）
+        target_train_data = img_t[:target_train_size].to(device)
+        pseudo_labels = pseudo_labels.to(device)  # 使用伪标签
+
+        # 提取不稳定特征（style）
+        _, style = extract_features(unstable_model, target_train_data, d_t[:target_train_size])  # 提取不变特征
+
+        # 使用不稳定特征进行分类
+        logits = unstable_model.unstable_classifier(style)  # 分类
+
+        # 计算交叉熵损失与伪标签之间的损失
+        loss = F.cross_entropy(logits, pseudo_labels)
+
+        # 反向传播并更新权重
+        optimizer.zero_grad()
+        loss.backward()
+        optimizer.step()
+
+        # 更新学习率
+        lr_scheduler.step()
+
+        # 更新统计指标
+        acc = accuracy(logits, pseudo_labels)[0]
+        cls_losses.update(loss.item(), target_train_data.size(0))
+        cls_accs.update(acc.item(), target_train_data.size(0))
+
+        # 计时
+        batch_time.update(time.time() - end)
+        end = time.time()
+
+        # 每隔一定频率打印进度信息
+        if i % args.print_freq == 0:
+            # 切换到评估模式
+            unstable_model.eval()
+
+            with torch.no_grad():
+                # 使用不稳定特征模型进行验证
+                val_logits = unstable_model(target_val_data, target_val_domains)  # 补上域信息
+                val_loss = F.cross_entropy(val_logits, target_val_labels)
+                val_acc = accuracy(val_logits, target_val_labels)[0]
+                progress.display(i)
+            unstable_model.train()
+
+            progress.display(i)
+
+            # 记录验证的损失和准确率
+            wandb.log({
+                "Unstable Model Fine-tuning Loss": cls_losses.avg,
+                "Unstable Model Fine-tuning Accuracy": cls_accs.avg,
+                "Validation Loss": val_loss.item(),
+                "Validation Accuracy": val_acc.item(),
+            })
+
+if __name__ == '__main__':
+    parser = argparse.ArgumentParser(description='DANN for Unsupervised Domain Adaptation')
+    # 数据集参数
+    parser.add_argument('--root', type=str, default='../../da_datasets/pacs',
+                        help='root path of dataset')   
+    parser.add_argument('-d', '--data', metavar='DATA', default='PACS', choices=utils.get_dataset_names(),
+                        help='dataset: ' + ' | '.join(utils.get_dataset_names()) +
+                             ' (default: PACS)')
+    parser.add_argument('-s', '--source', help='source domain(s)', default='C,P,A')
+    parser.add_argument('-t', '--target', help='target domain(s)', default='S')
+    parser.add_argument('--train-resizing', type=str, default='default')
+    parser.add_argument('--val-resizing', type=str, default='default') 
+    parser.add_argument('--resize-size', type=int, default=224,
+                        help='the image size after resizing') 
+    parser.add_argument('--no-hflip', action='store_true',
+                        help='no random horizontal flipping during training')
+    parser.add_argument('--norm-mean', type=float, nargs='+',
+                        default=(0.485, 0.456, 0.406), help='normalization mean')
+    parser.add_argument('--norm-std', type=float, nargs='+',
+                        default=(0.229, 0.224, 0.225), help='normalization std')
+
+
+    # 模型参数
+    parser.add_argument('-a', '--arch', metavar='ARCH', default='resnet18',
+                        choices=utils.get_model_names(),
+                        help='backbone architecture: ' +
+                             ' | '.join(utils.get_model_names()) +
+                             ' (default: resnet18)')
+    parser.add_argument('--bottleneck-dim', default=2048, type=int,
+                        help='Dimension of bottleneck')
+    parser.add_argument('--no-pool', action='store_true',
+                        help='no pool layer after the feature extractor.')
+    parser.add_argument('--scratch', action='store_true', help='whether train from scratch.')
+    parser.add_argument('--trade-off', default=1., type=float,
+                        help='the trade-off hyper-parameter for transfer loss')
+    # 训练参数
+    parser.add_argument('-b', '--batch-size', default=48, type=int,
+                        metavar='N', help='mini-batch size (default: 48)')
+    parser.add_argument('--lr', '--learning-rate', default=0.01, type=float,
+                        metavar='LR', help='initial learning rate', dest='lr')
+    parser.add_argument('--lr-gamma', default=0.0003, type=float, help='parameter for lr scheduler')
+    parser.add_argument('--lr-decay', default=0.75, type=float, help='parameter for lr scheduler')
+    parser.add_argument('--momentum', default=0.9, type=float, metavar='M',
+                        help='momentum')
+    parser.add_argument('--wd', '--weight-decay', default=5e-4, type=float,
+                        metavar='W', help='weight decay (default: 1e-3)',
+                        dest='weight_decay')
+    parser.add_argument('-j', '--workers', default=2, type=int, metavar='N',
+                        help='number of data loading workers (default: 2)')
+    parser.add_argument('--epochs', default=40, type=int, metavar='N',
+                        help='number of total epochs to run')
+    parser.add_argument('-i', '--iters-per-epoch', default=2500, type=int,
+                        help='Number of iterations per epoch')
+    parser.add_argument('-p', '--print-freq', default=100, type=int,
+                        metavar='N', help='print frequency (default: 100)')
+    parser.add_argument('-e', '--eval-freq', default=100, type=int,
+                        metavar='N', help='print frequency (default: 100)')
+
+    # 随机种子和评估选项
+    parser.add_argument('--seed', default=5, type=int,
+                        help='seed for initializing training. ')
+    parser.add_argument('--per-class-eval', action='store_true',
+                        help='whether output per-class accuracy during evaluation')
+    parser.add_argument("--log", type=str, default='logs',
+                        help="Where to save logs, checkpoints and debugging images.")
+    parser.add_argument("--phase", type=str, default='train', choices=['train', 'test', 'analysis'],
+                        help="When phase is 'test', only test the model."
+                             "When phase is 'analysis', only analysis the model.")
+    # 模型超参数
+    parser.add_argument('--z_dim', type=int, default=64, metavar='N')
+    parser.add_argument('--train_batch_size', default=16, type=int)
+    parser.add_argument('--s_dim', type=int, default=4, metavar='N')
+    parser.add_argument('--hidden_dim', type=int, default=4096, metavar='N')
+    parser.add_argument('--beta', type=float, default=1., metavar='N')
+    parser.add_argument('--name', type=str, default='ours_PACS_KL_dim_8', metavar='N')
+    parser.add_argument('--flow', type=str, default='ddsf', metavar='N')
+    parser.add_argument('--flow_dim', type=int, default=16, metavar='N')
+    parser.add_argument('--flow_nlayer', type=int, default=2, metavar='N')
+    parser.add_argument('--init_value', type=float, default=0.0, metavar='N')
+    parser.add_argument('--flow_bound', type=int, default=5, metavar='N')
+    parser.add_argument('--flow_bins', type=int, default=8, metavar='N')
+    parser.add_argument('--flow_order', type=str, default='linear', metavar='N')
+    parser.add_argument('--net', type=str, default='dirt', metavar='N')
+    parser.add_argument('--n_flow', type=int, default=2, metavar='N')
+    parser.add_argument('--lambda_vae', type=float, default=5e-5, metavar='N')
+    parser.add_argument('--lambda_cls', type=float, default=1., metavar='N')
+    parser.add_argument('--lambda_ent', type=float, default=0.1, metavar='N')
+    parser.add_argument('--entropy_thr', type=float, default=0.5, metavar='N')
+    parser.add_argument('--C_max', type=float, default=15., metavar='N')
+    parser.add_argument('--C_stop_iter', type=int, default=10000, metavar='N')
+
+
+    args = parser.parse_args()
+    model_id = f"{args.data}_{args.target}/{args.name}"
+    args.log = os.path.join(args.log, model_id)
+
+    args.source = [i for i in args.source.split(',')]
+    args.target = [i for i in args.target.split(',')]
+    args.n_domains = len(args.source) + len(args.target)
+    args.input_dim = 2048
+    if 'pacs' in args.root:
+        args.input_dim = 512
+        args.hidden_dim = 256
+    args.norm_id = args.n_domains - 1
+    args.c_dim = args.z_dim - args.s_dim
+
     wandb.init(
         project="domain_adaptation_partial_identifiability",
         group=args.name,
     )
     wandb.config.update(args)
 
-    # 测试阶段
-    if args.phase == 'test':
-        acc1 = utils.validate(test_loader, unstable_model, args, device)
-        print(f"初始测试准确率: {acc1:.4f}")
-
-        # 添加伪标签微调
-        print("开始伪标签微调...")
-        pseudo_label_finetune(
-            test_loader=test_loader,
-            unstable_model=unstable_model,
-            stable_model=stable_model,  # 使用不同的稳定模型
-            optimizer=optimizer,
-            criterion=nn.CrossEntropyLoss(),  # 多分类问题使用交叉熵损失
-            device=device
-        )
-
-        acc2 = utils.validate(test_loader, unstable_model, args, device)
-        print(f"伪标签微调后准确率: {acc2:.4f}")
-        return
-
-    # 训练阶段
-    if args.phase == 'train':
-        best_acc1 = 0.
-        total_iter = 0
-        for epoch in range(args.epochs):
-            print("lr:", lr_scheduler.get_last_lr(), optimizer.param_groups[0]['lr'])
-
-            # 训练
-            train_one_epoch(train_source_loader, train_target_loader, stable_model, unstable_model, optimizer, epoch, args, total_iter, backbone)
-            total_iter += args.iters_per_epoch
-
-            # 验证
-            acc1 = utils.validate(val_loader, unstable_model, args, device)
-            print(' * 验证准确率 %.3f' % (acc1))
-
-            # 保存检查点
-            torch.save(unstable_model.state_dict(), logger.get_checkpoint_path('latest'))
-            if acc1 > best_acc1:
-                shutil.copy(logger.get_checkpoint_path('latest'), logger.get_checkpoint_path('best'))
-            best_acc1 = max(acc1, best_acc1)
-
-            # 使用 wandb 记录验证准确率
-            wandb.log({"Val Acc": acc1})
-            
-            # 额外的测试（如果是 DomainNet 数据集）
-            if args.data.lower() == "domainnet":
-                acc1 = utils.validate(test_loader, unstable_model, args, device)
-            wandb.log({"Test Acc": acc1})
-
-            message = '(epoch %d): Test Acc@1 %.3f' % (epoch+1, acc1)
-            print(message)
-            with open('%s/test.txt' % args.log, 'a') as record:
-                record.write(message + '\n')
-
-        print("最佳验证准确率 = {:3.1f}".format(best_acc1))
-
-    # 最后在测试集上评估最佳模型
-    unstable_model.load_state_dict(torch.load(logger.get_checkpoint_path('best')))
-    acc1 = utils.validate(test_loader, unstable_model, args, device)
-    print(f"最终最佳测试准确率 = {acc1:.3f}")
-    logger.close()
-
-def train_one_epoch(train_source_loader, train_target_loader, stable_model, unstable_model, optimizer, epoch, args, total_iter, backbone):
-    stable_model.train()
-    unstable_model.train()
-    for (X_s, Y_s), (X_t, Y_t) in zip(train_source_loader, train_target_loader):
-        # 提取不变特征（从源域）
-        X_s, Y_s = X_s.to(device), Y_s.to(device)
-        z_s, _, _, _, _, _ = stable_model.encode(X_s, Y_s)
-        
-        # 提取可变特征（从目标域）
-        X_t, Y_t = X_t.to(device), Y_t.to(device)
-        _, z_t, _, _, _, _ = unstable_model.encode(X_t, Y_t)
-        
-        # 用不变特征训练稳定模型
-        stable_model_loss = F.cross_entropy(stable_model(z_s), Y_s)
-        
-        # 用可变特征训练不稳定模型
-        unstable_model_loss = F.cross_entropy(unstable_model(z_t), Y_t)
-        
-        # 总损失
-        loss = stable_model_loss + unstable_model_loss
-        
-        optimizer.zero_grad()
-        loss.backward()
-        optimizer.step()
-
-if __name__ == '__main__':
-    parser = argparse.ArgumentParser(description='DANN for Unsupervised Domain Adaptation')
-    parser.add_argument('--root', type=str, default='../da_datasets/office-home', help='root path of dataset')
-    parser.add_argument('-d', '--data', metavar='DATA', default='OfficeHome', choices=utils.get_dataset_names(), help='dataset: ' + ' | '.join(utils.get_dataset_names()) + ' (default: Office31)')
-    parser.add_argument('-s', '--source', help='source domain(s)', default='Ar,Cl,Pr')
-    parser.add_argument('-t', '--target', help='target domain(s)', default='Rw')
-    parser.add_argument('--train-resizing', type=str, default='default')
-    parser.add_argument('--val-resizing', type=str, default='default')
-    parser.add_argument('--resize-size', type=int, default=224, help='the image size after resizing')
-    parser.add_argument('--no-hflip', action='store_true', help='no random horizontal flipping during training')
-    parser.add_argument('--norm-mean', type=float, nargs='+', default=(0.485, 0.456, 0.406), help='normalization mean')
-    parser.add_argument('--norm-std', type=float, nargs='+', default=(0.229, 0.224, 0.225), help='normalization std')
-    parser.add_argument('-a', '--arch', metavar='ARCH', default='resnet50', choices=utils.get_model_names(), help='backbone architecture: ' + ' | '.join(utils.get_model_names()) + ' (default: resnet18)')
-    parser.add_argument('--bottleneck-dim', default=2048, type=int, help='Dimension of bottleneck')
-    parser.add_argument('--scratch', action='store_true', help='whether train from scratch.')
-    parser.add_argument('--trade-off', default=1., type=float, help='the trade-off hyper-parameter for transfer loss')
-    parser.add_argument('-b', '--batch-size', default=48, type=int, metavar='N', help='mini-batch size (default: 32)')
-    parser.add_argument('--lr', '--learning-rate', default=0.01, type=float, metavar='LR', help='initial learning rate', dest='lr')
-    parser.add_argument('--lr-gamma', default=0.0003, type=float, help='parameter for lr scheduler')
-    parser.add_argument('--lr-decay', default=0.75, type=float, help='parameter for lr scheduler')
-    parser.add_argument('--momentum', default=0.9, type=float, metavar='M', help='momentum')
-    parser.add_argument('--wd', '--weight-decay', default=5e-4, type=float, metavar='W', help='weight decay (default: 1e-3)', dest='weight_decay')
-    parser.add_argument('-j', '--workers', default=2, type=int, metavar='N', help='number of data loading workers (default: 2)')
-    parser.add_argument('--epochs', default=40, type=int, metavar='N', help='number of total epochs to run')
-    parser.add_argument('-i', '--iters-per-epoch', default=2000, type=int, help='Number of iterations per epoch')
-    parser.add_argument('--phase', type=str, default='train', choices=['train', 'test', 'analysis'], help="When phase is 'test', only test the model. When phase is 'analysis', only analysis the model.")
-    parser.add_argument('--z_dim', type=int, default=128, metavar='N', help='latent feature dimension')
-    parser.add_argument('--style_dim', type=int, default=64, metavar='N', help='style feature dimension')
-    parser.add_argument('--lambda_vae', type=float, default=1e-4, metavar='N', help='VAE loss coefficient')
-    args = parser.parse_args()
     main(args)
+

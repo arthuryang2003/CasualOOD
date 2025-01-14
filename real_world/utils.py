@@ -273,3 +273,97 @@ def str2bool(v):
         return False
     else:
         raise argparse.ArgumentTypeError('Boolean value expected.')
+
+
+
+# def combined_inference(stable_model, unstable_model, test_loader,num_classes):
+#     # 初始化先验分布和混淆矩阵
+#     PY = torch.zeros(num_classes).to(device)  # 类别先验分布
+#     e_matrix = torch.zeros(num_classes, num_classes).to(device)  # 混淆矩阵
+#
+#     # 第一遍：计算混淆矩阵和先验分布
+#     stable_model.eval()
+#     unstable_model.eval()
+#     with torch.no_grad():
+#         for batch_idx, batch in enumerate(test_loader):
+#             # 解包数据，只取前两个（data 和 labels）
+#             data, labels = batch[:2]
+#             data = data.to(device)
+#             labels = labels.to(device)
+#             if labels.dim() == 1:
+#                 labels = F.one_hot(labels, num_classes=num_classes).float()
+#
+#             # compute output
+#             u = torch.ones([len(data)]).long().to(device)
+#             # 提取稳定特征和不稳定特征
+#             stable_features, _ = extract_features(stable_model, data, u)  # 提取稳定特征
+#             _, unstable_features = extract_features(unstable_model, data, u)  # 提取不稳定特征
+#
+#             # 稳定模型预测
+#             Y_pred_stable = F.softmax(stable_model.stable_classifier(stable_features), dim=1)
+#             Y_pred_stable_hard = (Y_pred_stable == Y_pred_stable.max(dim=1, keepdim=True)[0]).float()
+#
+#             # 更新先验分布
+#             PY += labels.sum(dim=0)
+#
+#             e_matrix += torch.matmul(labels.T, Y_pred_stable_hard)
+#
+#             # # 更新混淆矩阵
+#             # for k in range(num_classes):
+#             #     for k_prime in range(num_classes):
+#             #         e_matrix[k, k_prime] += (
+#             #             (labels[:, k_prime] * Y_pred_stable_hard[:, k]).sum().item()
+#             #         )
+#
+#     # 归一化混淆矩阵和先验分布
+#     e_matrix = e_matrix / e_matrix.sum(dim=0, keepdim=True)
+#     PY = PY / PY.sum()
+#
+#     # 第二遍：使用调整后的不稳定模型预测
+#     correct = 0
+#     total = 0
+#     OOD = 0
+#     with torch.no_grad():
+#         for batch_idx, batch in enumerate(test_loader):
+#             # 解包数据，只取前两个（data 和 labels）
+#             data, labels = batch[:2]
+#             data = data.to(device)
+#             labels = labels.to(device)
+#             # 转换为 one-hot 编码
+#             if labels.dim() == 1:
+#                 labels = F.one_hot(labels, num_classes=num_classes).float()
+#
+#             u = torch.ones([len(data)]).long().to(device)
+#             # 提取稳定特征和不稳定特征
+#             stable_features, _ = extract_features(stable_model, data, u)  # 提取稳定特征
+#             _, unstable_features = extract_features(unstable_model, data, u)  # 提取不稳定特征
+#
+#
+#             # 稳定模型预测
+#             Y_stable = F.softmax(stable_model.stable_classifier(stable_features), dim=1)
+#             Xlogit = torch.log(Y_stable + 1e-6)
+#
+#             # 调整不稳定模型预测
+#             Y_unstable = F.softmax(unstable_model.unstable_classifier(unstable_features), dim=1)
+#             Y_unstable_corrected = torch.matmul(Y_unstable, torch.inverse(e_matrix))
+#             Ulogit = torch.log(Y_unstable_corrected + 1e-6)
+#
+#             # 计算类别先验的对数
+#             prior_logit = torch.log(PY / (1 - PY) + 1e-6)
+#
+#             # 联合预测
+#             combined_logit = Xlogit + Ulogit - prior_logit
+#             predict = torch.softmax(combined_logit, dim=1)
+#
+#
+#
+#             # 转换为硬标签
+#             predicted = (predict == predict.max(dim=1, keepdim=True)[0]).float()
+#             OOD += predicted.sum(dim=1).mean().item()
+#             correct += (predicted == labels).all(dim=1).sum().item()
+#             total += labels.size(0)
+#
+#     # 输出准确率和 OOD
+#     OOD = OOD / total
+#     accuracy = correct / total
+#     return accuracy

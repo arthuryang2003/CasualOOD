@@ -46,32 +46,13 @@ class iVAE(nn.Module):
                                      nn.ReLU(),
                                      nn.Linear(dim, self.backbone_net.out_features))
 
-        # 全局分类器
-        self.classifier = nn.Sequential(
-            nn.Linear(self.z_dim, dim),
-            nn.BatchNorm1d(dim),
-            nn.ReLU(),
-            nn.Dropout(),
-            nn.Linear(dim, args.num_classes)
-        )
-
-        # 新增稳定和不稳定分类器
-        self.stable_classifier = nn.Sequential(
-            nn.Linear(self.c_dim, dim),
-            nn.BatchNorm1d(dim),
-            nn.ReLU(),
-            nn.Dropout(),
-            nn.Linear(dim, args.num_classes)  # 输出类别数
-        )
-
-        self.unstable_classifier = nn.Sequential(
-            nn.Linear(self.s_dim, dim),
-            nn.BatchNorm1d(dim),
-            nn.ReLU(),
-            nn.Dropout(),
-            nn.Linear(dim, args.num_classes)  # 输出类别数
-        )
-
+        if args.arch == 'resnet18':
+            self.classifier = nn.Sequential(
+                        nn.Linear(self.z_dim, dim), nn.BatchNorm1d(dim), nn.ReLU(), nn.Dropout(),
+                        nn.Linear(dim, args.num_classes)
+            )
+        else:
+            self.classifier = nn.Sequential(nn.Linear(self.z_dim, args.num_classes))
 
         self.flow_type = flow
         self.u_embedding = nn.Embedding(10, 1024)
@@ -86,9 +67,8 @@ class iVAE(nn.Module):
             domain_num_params = self.domain_flow.num_params * self.s_dim
             self.domain_mlp = MLP(1024, domain_num_params)
 
-        # print(self.encoder, self.fc_mu, self.fc_logvar)
-        # print(self.decoder, self.classifier, self.stable_classifier, self.unstable_classifier)
-
+        print(self.encoder, self.fc_mu, self.fc_logvar)
+        print(self.decoder, self.domain_flow, self.classifier)
 
         self.lambda_vae = args.lambda_vae
 
@@ -179,20 +159,6 @@ class iVAE(nn.Module):
     def predict(self, z, track_bn=False):
         self.track_bn_stats(track_bn)
         return self.classifier(z)
-
-    def predict_stable(self, z_stable,track_bn=False):
-        """
-        使用稳定分类器进行预测
-        """
-        self.track_bn_stats(track_bn)
-        return self.stable_classifier(z_stable)
-
-    def predict_unstable(self, z_unstable,track_bn=False):
-        """
-        使用不稳定分类器进行预测
-        """
-        self.track_bn_stats(track_bn)
-        return self.unstable_classifier(z_unstable)
 
     def get_parameters(self, base_lr=1.0):
         """A parameter list which decides optimization hyper-parameters,

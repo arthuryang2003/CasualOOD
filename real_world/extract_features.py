@@ -50,26 +50,36 @@ def main(args: argparse.Namespace):
                                                 norm_mean=args.norm_mean, norm_std=args.norm_std)
     train_transform = utils.get_val_transform(args.val_resizing, resize_size=args.resize_size,
                                             norm_mean=args.norm_mean, norm_std=args.norm_std)
+    # 设置验证集的预处理变换
     val_transform = utils.get_val_transform(args.val_resizing, resize_size=args.resize_size,
                                             norm_mean=args.norm_mean, norm_std=args.norm_std)
     print("train_transform: ", train_transform)
     print("val_transform: ", val_transform)
 
+    # 如果数据集是DomainNet，处理DomainNet数据集
     if args.data.lower() == 'domainnet':
+        # 加载ResNet101模型作为backbone
         backbone = utils.get_model('resnet101', pretrain=True).to(device)
+        # 连接额外的全局池化层和Flatten层
         backbone = nn.Sequential(backbone, nn.AdaptiveAvgPool2d(output_size=(1,1)), nn.Flatten())
         backbone.eval()
+        # 处理所有数据集
         all_dataset = ['i', 'p', 'q', 'r', 's', 'c']
         for dataset in all_dataset:
+            # 选择当前数据集作为目标域，其他作为源域
             source_dataset = ['i', 'p', 'q', 'r', 's', 'c']
             source_dataset.remove(dataset)
             dataset = [dataset]
+
+            # 获取数据集
             _, train_target_dataset, val_dataset, test_dataset, num_classes, args.class_names = \
                 utils.get_dataset(args.data, args.root, source_dataset, dataset, train_transform, val_transform)
+            # 设置数据加载器
             train_target_loader = DataLoader(train_target_dataset, batch_size=args.batch_size,
                                              shuffle=False, num_workers=args.workers, drop_last=False)
             val_loader = DataLoader(val_dataset, batch_size=args.batch_size, shuffle=False, num_workers=args.workers)
             test_loader = DataLoader(test_dataset, batch_size=args.batch_size, shuffle=False, num_workers=args.workers)
+            # 转换训练数据
             print('converting training data!')
             features = []
             labels = []
@@ -89,6 +99,7 @@ def main(args: argparse.Namespace):
             #torch.save(features.detach().cpu(), osp.join(args.root, 'domainnet_%s_train.pt' % dataset[0]))
             print('converting training data finished! %d samples in domain %s' % (i+1, dataset[0]))
 
+            # 转换验证数据
             print('converting validation data!')
             features = []
             labels = []
@@ -107,7 +118,7 @@ def main(args: argparse.Namespace):
             #torch.save(features.detach().cpu(), osp.join(args.root, 'domainnet_%s_val.pt' % dataset[0]))
             print('converting validation data finished! %d samples in domain %s' % (i+1, dataset[0]))
 
-
+            # 转换测试数据
             print('converting testing data!')
             features = []
             labels = []

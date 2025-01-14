@@ -33,11 +33,11 @@ class PACS(ImageList):
                 sketch.txt
     """
     download_list = [
-        ("image_list", "image_list.zip", "https://cloud.tsinghua.edu.cn/f/add42cc3859847bc988c/?dl=1"),
-        ("art_painting", "art_painting.tgz", "https://cloud.tsinghua.edu.cn/f/4eb7db4f3eec41719856/?dl=1"),
-        ("cartoon", "cartoon.tgz", "https://cloud.tsinghua.edu.cn/f/d847ac22497b4826889f/?dl=1"),
-        ("photo", "photo.tgz", "https://cloud.tsinghua.edu.cn/f/458ad21483da4a45935b/?dl=1"),
-        ("sketch", "sketch.tgz", "https://cloud.tsinghua.edu.cn/f/c892ac2d94a44b1196b8/?dl=1"),
+        # ("image_list", "image_list.zip", "https://cloud.tsinghua.edu.cn/f/add42cc3859847bc988c/?dl=1"),
+        # ("art_painting", "art_painting.tgz", "https://cloud.tsinghua.edu.cn/f/4eb7db4f3eec41719856/?dl=1"),
+        # ("cartoon", "cartoon.tgz", "https://cloud.tsinghua.edu.cn/f/d847ac22497b4826889f/?dl=1"),
+        # ("photo", "photo.tgz", "https://cloud.tsinghua.edu.cn/f/458ad21483da4a45935b/?dl=1"),
+        # ("sketch", "sketch.tgz", "https://cloud.tsinghua.edu.cn/f/c892ac2d94a44b1196b8/?dl=1"),
     ]
     image_list = {
         "A": "image_list/art_painting_{}.txt",
@@ -54,6 +54,7 @@ class PACS(ImageList):
             split = "all"
         data_list_file = os.path.join(root, self.image_list[task].format(split))
 
+        download=True
         if download:
             list(map(lambda args: download_data(root, *args), self.download_list))
         else:
