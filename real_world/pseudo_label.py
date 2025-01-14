@@ -26,8 +26,8 @@ def combined_inference(stable_model, unstable_model, test_loader,num_classes):
             # compute output
             u = torch.ones([len(data)]).long().to(device)
             # 提取稳定特征和不稳定特征
-            stable_features, _ = extract_features(stable_model, data, u)  # 提取稳定特征
-            _, unstable_features = extract_features(unstable_model, data, u)  # 提取不稳定特征
+            stable_features, _ = extract_features(stable_model, data, u,True)  # 提取稳定特征
+            _, unstable_features = extract_features(unstable_model, data, u,True)  # 提取不稳定特征
 
             # 稳定模型预测（使用 sigmoid）
             Y_pred_stable = torch.sigmoid(stable_model.stable_classifier(stable_features))

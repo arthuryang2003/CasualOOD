@@ -1,4 +1,5 @@
 import torch
+from common.modules.networks import iVAE
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 

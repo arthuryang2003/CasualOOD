@@ -70,7 +70,7 @@ def train_stable(train_source_iter: ForeverDataIterator,
             domain_id = id
             is_target = domain_id == args.n_domains - 1  # 判断是否为目标域
 
-            if not is_target:
+            if is_target:
                 continue
 
             # 获取当前域的样本数据
@@ -96,7 +96,7 @@ def train_stable(train_source_iter: ForeverDataIterator,
         # 分类损失
         mean_loss_cls = torch.stack(losses_cls, 0).mean()
 
-        # 总损失 = 分类损失 + VAE损失 + 熵损失
+        # 总损失 = 分类损失
         loss = mean_loss_cls
 
         # 合并源域标签和预测结果，计算分类准确率
@@ -112,6 +112,8 @@ def train_stable(train_source_iter: ForeverDataIterator,
         loss.backward()
         optimizer.step()
 
+        # 更新学习率
+        lr_scheduler.step()
 
         # 计时
         batch_time.update(time.time() - end)
@@ -137,12 +139,12 @@ def train_stable(train_source_iter: ForeverDataIterator,
 
             # 打印进度并记录日志
             progress.display(i)
+
             wandb.log({
-                "Stable Model Train Loss": cls_losses.avg,
-                "Stable Model Train Accuracy": cls_accs.avg,
+                "Stable Model Train Loss": mean_loss_cls.item(),
+                "Stable Model Train Accuracy": cls_acc.item(),
                 "Target Domain Accuracy": cls_t_acc.item(),
-                "Train Source Acc": cls_accs.avg,
-                "Train Source Cls Loss": cls_losses.avg,
+
             })
 
 def train_unstable(train_source_iter: ForeverDataIterator,
@@ -197,6 +199,8 @@ def train_unstable(train_source_iter: ForeverDataIterator,
             domain_id = id
             is_target = domain_id == args.n_domains - 1  # 判断是否为目标域
 
+            if is_target:
+                continue
 
             # 获取当前域的样本数据
             index = d_all == id  # 获取当前域的样本
@@ -221,7 +225,7 @@ def train_unstable(train_source_iter: ForeverDataIterator,
         # 分类损失
         mean_loss_cls = torch.stack(losses_cls, 0).mean()
 
-        # 总损失 = 分类损失 + VAE损失 + 熵损失
+        # 总损失 = 分类损失
         loss = mean_loss_cls
 
         # 合并源域标签和预测结果，计算分类准确率
@@ -266,8 +270,8 @@ def train_unstable(train_source_iter: ForeverDataIterator,
             progress.display(i)
 
             wandb.log({
-                "Unstable Model Train Loss": mean_loss_cls.avg,
-                "Unstable Model Train Accuracy": cls_accs.avg,
+                "Unstable Model Train Loss": mean_loss_cls.item(),
+                "Unstable Model Train Accuracy": cls_acc.item(),
                 "Target Domain Accuracy": cls_t_acc.item(),
             })
 
@@ -316,7 +320,7 @@ def finetune_unstable_with_pseudo_labels(stable_model, unstable_model, train_tar
     stable_model.eval()
     with torch.no_grad():
         # 获取稳定模型的输出并生成伪标签
-        stable_logits = stable_model.stable_classifier(extract_features(stable_model, target_train_data, d_t_all[target_train_idx])[0])
+        stable_logits = stable_model.stable_classifier(extract_features(stable_model, target_train_data, d_t_all[target_train_idx],True)[0])
         pseudo_labels = torch.argmax(stable_logits, dim=1)
 
     # 微调不稳定模型
@@ -337,7 +341,7 @@ def finetune_unstable_with_pseudo_labels(stable_model, unstable_model, train_tar
         pseudo_labels = pseudo_labels.to(device)  # 使用伪标签
 
         # 提取不稳定特征（style）
-        _, style = extract_features(unstable_model, target_train_data, d_t[:target_train_size])  # 提取不变特征
+        _, style = extract_features(unstable_model, target_train_data, d_t[:target_train_size],True)  # 提取不变特征
 
         # 使用不稳定特征进行分类
         logits = unstable_model.unstable_classifier(style)  # 分类
@@ -357,7 +361,6 @@ def finetune_unstable_with_pseudo_labels(stable_model, unstable_model, train_tar
 
         # 更新学习率
         lr_scheduler.step()
-
 
         # 计时
         batch_time.update(time.time() - end)
