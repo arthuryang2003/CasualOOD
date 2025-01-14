@@ -33,11 +33,11 @@ class PACS(ImageList):
                 sketch.txt
     """
     download_list = [
-        # ("image_list", "image_list.zip", "https://cloud.tsinghua.edu.cn/f/add42cc3859847bc988c/?dl=1"),
-        # ("art_painting", "art_painting.tgz", "https://cloud.tsinghua.edu.cn/f/4eb7db4f3eec41719856/?dl=1"),
-        # ("cartoon", "cartoon.tgz", "https://cloud.tsinghua.edu.cn/f/d847ac22497b4826889f/?dl=1"),
-        # ("photo", "photo.tgz", "https://cloud.tsinghua.edu.cn/f/458ad21483da4a45935b/?dl=1"),
-        # ("sketch", "sketch.tgz", "https://cloud.tsinghua.edu.cn/f/c892ac2d94a44b1196b8/?dl=1"),
+        ("image_list", "image_list.zip", "https://drive.usercontent.google.com/download?id=1pFH6Ro5al5KdgnON8uhA_JllQ3B_9n_g&export=download&authuser=0"),
+        ("art_painting", "art_painting.tgz", "https://drive.usercontent.google.com/download?id=15MCPsU-9zBrimi1FzGSoB7ZG1Kg4jzPW&export=download&authuser=0"),
+        ("cartoon", "cartoon.tgz", "https://drive.usercontent.google.com/download?id=10XxReJt281dLbKqJJD5Zs7E0mYNXrZu8&export=download&authuser=0"),
+        ("photo", "photo.tgz", "https://drive.usercontent.google.com/download?id=1BnXh9SuJzUQAVMYEpdLqizVxSGkmovHj&export=download&authuser=0"),
+        ("sketch", "sketch.tgz", "https://drive.usercontent.google.com/download?id=1_yIGPjqhwSPjdz749YjmZAJo8B3Vv-cl&export=download&authuser=0"),
     ]
     image_list = {
         "A": "image_list/art_painting_{}.txt",
@@ -54,7 +54,6 @@ class PACS(ImageList):
             split = "all"
         data_list_file = os.path.join(root, self.image_list[task].format(split))
 
-        download=True
         if download:
             list(map(lambda args: download_data(root, *args), self.download_list))
         else:
