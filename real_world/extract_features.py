@@ -19,13 +19,5 @@ def extract_features(model, x, u, is_target=False):
     content = z[:, :model.c_dim]  # 不变特征
     style = z[:, model.c_dim:]   # 可变特征
 
-
-    # 扩充 content 和 style 到 z_dim 的维度，并保持原有位置
-    content_padded = torch.zeros(z.size(0), model.z_dim, device=z.device)
-    content_padded[:, :model.c_dim] = content
-
-    style_padded = torch.zeros(z.size(0), model.z_dim, device=z.device)
-    style_padded[:, model.c_dim:] = style
-
-    return content_padded, style_padded
+    return content,style
 
