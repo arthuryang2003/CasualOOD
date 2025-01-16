@@ -283,7 +283,7 @@ def train_unstable(train_source_iter: ForeverDataIterator,
             _, style = extract_features(model, img_dom, d_dom,is_target)  # 提取可变特征
 
             # 使用不稳定特征进行分类
-            logits = model.unstable_classifier(style)  # 分类
+            logits = model.classifier(style)  # 分类
 
             if not is_target:  # only source
                 # 计算交叉熵损失
@@ -426,7 +426,7 @@ def finetune_unstable_with_pseudo_labels(stable_model, unstable_model, train_tar
     stable_model.eval()
     with torch.no_grad():
         # 获取稳定模型的输出并生成伪标签
-        stable_logits = stable_model.stable_classifier(extract_features(stable_model, target_train_data, d_t_all[target_train_idx],True)[0])
+        stable_logits = stable_model.classifier(extract_features(stable_model, target_train_data, d_t_all[target_train_idx],True)[0])
         pseudo_labels = torch.argmax(stable_logits, dim=1)
 
     # 微调不稳定模型
@@ -450,7 +450,7 @@ def finetune_unstable_with_pseudo_labels(stable_model, unstable_model, train_tar
         _, style = extract_features(unstable_model, target_train_data, d_t[:target_train_size],True)  # 提取不变特征
 
         # 使用不稳定特征进行分类
-        logits = unstable_model.unstable_classifier(style)  # 分类
+        logits = unstable_model.classifier(style)  # 分类
 
         # 计算交叉熵损失与伪标签之间的损失
         loss = F.cross_entropy(logits, pseudo_labels)
