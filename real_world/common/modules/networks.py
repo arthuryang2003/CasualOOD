@@ -47,31 +47,31 @@ class iVAE(nn.Module):
                                      nn.Linear(dim, self.backbone_net.out_features))
 
         # 全局分类器
-        self.classifier = nn.Sequential(
-            nn.Linear(self.z_dim, dim),
-            nn.BatchNorm1d(dim),
-            nn.ReLU(),
-            nn.Dropout(),
-            nn.Linear(dim, args.num_classes)
-        )
+        if args.arch == 'resnet18':
+            self.classifier = nn.Sequential(
+                        nn.Linear(self.z_dim, dim), nn.BatchNorm1d(dim), nn.ReLU(), nn.Dropout(),
+                        nn.Linear(dim, args.num_classes)
+            )
+        else:
+            self.classifier = nn.Sequential(nn.Linear(self.z_dim, args.num_classes))
 
-        # 新增稳定和不稳定分类器
-        self.stable_classifier = nn.Sequential(
-            nn.Linear(self.c_dim, dim),
-            nn.BatchNorm1d(dim),
-            nn.ReLU(),
-            nn.Dropout(),
-            nn.Linear(dim, args.num_classes)  # 输出类别数
-        )
-
-        self.unstable_classifier = nn.Sequential(
-            nn.Linear(self.s_dim, dim),
-            nn.BatchNorm1d(dim),
-            nn.ReLU(),
-            nn.Dropout(),
-            nn.Linear(dim, args.num_classes)  # 输出类别数
-        )
-
+        # # 新增稳定和不稳定分类器
+        # self.stable_classifier = nn.Sequential(
+        #     nn.Linear(self.c_dim, dim),
+        #     nn.BatchNorm1d(dim),
+        #     nn.ReLU(),
+        #     nn.Dropout(),
+        #     nn.Linear(dim, args.num_classes)  # 输出类别数
+        # )
+        #
+        # self.unstable_classifier = nn.Sequential(
+        #     nn.Linear(self.s_dim, dim),
+        #     nn.BatchNorm1d(dim),
+        #     nn.ReLU(),
+        #     nn.Dropout(),
+        #     nn.Linear(dim, args.num_classes)  # 输出类别数
+        # )
+        #
 
         self.flow_type = flow
         self.u_embedding = nn.Embedding(10, 1024)

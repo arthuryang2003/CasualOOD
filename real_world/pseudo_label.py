@@ -30,7 +30,7 @@ def combined_inference(stable_model, unstable_model, test_loader,num_classes):
             _, unstable_features = extract_features(unstable_model, data, u,True)  # 提取不稳定特征
 
             # 稳定模型预测（使用 sigmoid）
-            Y_pred_stable = torch.sigmoid(stable_model.stable_classifier(stable_features))
+            Y_pred_stable = torch.sigmoid(stable_model.classifier(stable_features))
             Y_pred_stable_hard = (Y_pred_stable > 0.5).float()
 
             # 更新先验分布
@@ -64,11 +64,11 @@ def combined_inference(stable_model, unstable_model, test_loader,num_classes):
 
 
             # 稳定模型预测（sigmoid 输出概率）
-            Y_stable = torch.sigmoid(stable_model.stable_classifier(stable_features))
+            Y_stable = torch.sigmoid(stable_model.classifier(stable_features))
             Xlogit = torch.logit(Y_stable, eps=1e-6)
 
             # 不稳定模型预测并调整（sigmoid 输出 + 偏差校正）
-            Y_unstable = torch.sigmoid(unstable_model.unstable_classifier(unstable_features))
+            Y_unstable = torch.sigmoid(unstable_model.classifier(unstable_features))
             Y_unstable_corrected = torch.matmul(Y_unstable, torch.inverse(e_matrix))
             Y_unstable_corrected = torch.clamp(Y_unstable_corrected, min=0, max=1)
             Ulogit = torch.logit(Y_unstable_corrected, eps=1e-6)
@@ -79,13 +79,12 @@ def combined_inference(stable_model, unstable_model, test_loader,num_classes):
             # 转换为概率分布
             predict = torch.sigmoid(combined_logit)
 
-
             # 转换为硬标签（单标签分类选择最大概率）
             predicted = torch.argmax(predict, dim=1)
             correct += (predicted == torch.argmax(labels, dim=1)).sum().item()
             total += labels.size(0)
 
     # 输出准确率
-    accuracy = correct / total
+    accuracy = correct / total*100.0
     return accuracy
 
