@@ -23,14 +23,20 @@ def train_stable(train_source_iter: ForeverDataIterator,
     # 定义统计指标
     batch_time = AverageMeter('Time', ':5.2f')
     data_time = AverageMeter('Data', ':5.2f')
+    recon_losses = AverageMeter('Rec', ':4.2f')# 重建损失
+    vae_losses = AverageMeter('VAE', ':4.2f') # VAE损失
+    kl_losses = AverageMeter('KL', ':4.2f')# KL散度损失
     cls_losses = AverageMeter('Cls', ':4.2f')  # 分类损失
+    ent_losses = AverageMeter('Ent', ':4.2f')# 熵损失
     cls_accs = AverageMeter('Cls Acc', ':3.1f')  # 分类准确率
     val_accs = AverageMeter('Val Acc', ':3.1f') # 验证准确率
     progress = ProgressMeter(
         args.iters_per_epoch,
-        [batch_time, data_time, cls_losses, cls_accs],
+        [batch_time, data_time, cls_losses, ent_losses, vae_losses, recon_losses, kl_losses, cls_accs, val_accs],
         prefix="Stable Model Epoch: [{}]".format(epoch)
     )
+
+    normal_distribution = torch.distributions.MultivariateNormal(torch.zeros(args.z_dim).cuda(), torch.eye(args.z_dim).cuda())
 
     # 切换到训练模式
     model.train()
@@ -70,20 +76,32 @@ def train_stable(train_source_iter: ForeverDataIterator,
             domain_id = id
             is_target = domain_id == args.n_domains - 1  # 判断是否为目标域
 
-            if is_target:
-                continue
-
             # 获取当前域的样本数据
             index = d_all == id  # 获取当前域的样本
-            label_dom = label_all[index]
+            label_dom = label_all[index] if not is_target else None
             img_dom = img_all[index]
             d_dom = d_all[index]
+
+            # 特征提取
+            x_dom = model.backbone(img_dom, track_bn=is_target)
+            z, tilde_z, mu, log_var, logdet_u, _ = model.encode(x_dom, u=d_dom, track_bn=is_target)
+
+            # VAE KL Loss
+            q_dist = torch.distributions.Normal(mu, torch.exp(torch.clamp(log_var, min=-10) / 2))
+            log_qz = q_dist.log_prob(z)
+            log_pz = normal_distribution.log_prob(tilde_z) + logdet_u
+            kl = (log_qz.sum(dim=1) - log_pz).mean()
+
+             # 设置一个平滑的C值，以便在迭代过程中平滑调节
+            C = torch.clamp(torch.tensor(args.C_max) / args.C_stop_iter * total_iter, 0, args.C_max)
+            loss_kl = args.beta * (kl - C).abs()# 计算KL损失
 
             # 提取稳定特征（content）
             content, _ = extract_features(model, img_dom, d_dom,is_target)  # 提取不变特征
 
             # 使用稳定特征进行分类
-            logits = model.stable_classifier(content)  # 分类
+            logits = model.classifier(content)  # 分类
+
 
             if not is_target:  # only source
                 # 计算交叉熵损失
@@ -93,11 +111,36 @@ def train_stable(train_source_iter: ForeverDataIterator,
             else:
                 y_t = logits  # 如果是目标域，保存logit以便计算目标域的损失
 
+            losses_kl.append(loss_kl)
+            x_all.append(x_dom)
+            z_all.append(z)
+
+        x_all = torch.cat(x_all, 0) # 将所有域的特征合并
+        z_all = torch.cat(z_all, 0)# 合并所有的潜变量
+        x_all_hat = model.decode(z_all)# 解码潜变量，恢复图像
+
+        # vae loss
+        mean_loss_recon = F.mse_loss(x_all, x_all_hat, reduction='sum') / len(x_all)
+        mean_loss_kl = torch.stack(losses_kl, dim=0).mean()
+        mean_loss_vae = mean_loss_recon + mean_loss_kl
+
         # 分类损失
         mean_loss_cls = torch.stack(losses_cls, 0).mean()
 
-        # 总损失 = 分类损失
-        loss = mean_loss_cls
+        # entropy loss
+        loss_ent = torch.tensor(0.).to(device)
+        if args.lambda_ent > 0:
+            output_t = y_t
+            entropy = F.cross_entropy(output_t, torch.softmax(output_t, dim=1), reduction='none').detach()
+            index = torch.nonzero((entropy < args.entropy_thr).float()).squeeze(-1)
+            select_output_t = output_t[index]
+            if len(select_output_t) > 0:
+                loss_ent = F.cross_entropy(select_output_t, torch.softmax(select_output_t, dim=1))
+
+        # 总损失 = 分类损失 + VAE损失 + 熵损失
+        loss = mean_loss_cls \
+               + args.lambda_vae * mean_loss_vae \
+               + args.lambda_ent * loss_ent
 
         # 合并源域标签和预测结果，计算分类准确率
         y_s = torch.cat(y_s, 0)
@@ -106,6 +149,11 @@ def train_stable(train_source_iter: ForeverDataIterator,
 
         cls_losses.update(mean_loss_cls.item(), y_s.size(0))  # 更新分类损失
         cls_accs.update(cls_acc.item(), y_s.size(0))  # 更新分类准确率
+
+        recon_losses.update(mean_loss_recon.item(), x_all.size(0))# 更新重建损失
+        vae_losses.update(mean_loss_vae.item(), x_all.size(0))# 更新VAE损失
+        ent_losses.update(loss_ent.item(), y_t.size(0))# 更新熵损失
+        kl_losses.update(mean_loss_kl.item(), x_all.size(0))# 更新KL损失
 
         # 反向传播并更新权重
         optimizer.zero_grad()
@@ -144,6 +192,10 @@ def train_stable(train_source_iter: ForeverDataIterator,
                 "Stable Model Train Loss": mean_loss_cls.item(),
                 "Stable Model Train Accuracy": cls_acc.item(),
                 "Target Domain Accuracy": cls_t_acc.item(),
+                "Train Reconstruction Loss": mean_loss_recon.item(),
+                "Train VAE Loss": mean_loss_vae.item(),
+                "Entropy Loss": loss_ent.item(),
+                "Train KL": mean_loss_kl.item(),
 
             })
 
@@ -154,14 +206,20 @@ def train_unstable(train_source_iter: ForeverDataIterator,
     # 定义统计指标
     batch_time = AverageMeter('Time', ':5.2f')
     data_time = AverageMeter('Data', ':5.2f')
+    recon_losses = AverageMeter('Rec', ':4.2f')# 重建损失
+    vae_losses = AverageMeter('VAE', ':4.2f') # VAE损失
+    kl_losses = AverageMeter('KL', ':4.2f')# KL散度损失
     cls_losses = AverageMeter('Cls', ':4.2f')  # 分类损失
+    ent_losses = AverageMeter('Ent', ':4.2f')# 熵损失
     cls_accs = AverageMeter('Cls Acc', ':3.1f')  # 分类准确率
     val_accs = AverageMeter('Val Acc', ':3.1f')  # 验证准确率
     progress = ProgressMeter(
         args.iters_per_epoch,
-        [batch_time, data_time, cls_losses, cls_accs],
+        [batch_time, data_time, cls_losses, ent_losses, vae_losses, recon_losses, kl_losses, cls_accs, val_accs],
         prefix="Unstable Model Epoch: [{}]".format(epoch)
     )
+
+    normal_distribution = torch.distributions.MultivariateNormal(torch.zeros(args.z_dim).cuda(), torch.eye(args.z_dim).cuda())
 
     # 切换到训练模式
     model.train()
@@ -189,24 +247,37 @@ def train_unstable(train_source_iter: ForeverDataIterator,
 
         # 初始化各个损失项的列表
         losses_cls = []
-        z_all = []  # 保存所有的潜变量z
+        losses_kl = []
+        z_all = []# 保存所有的潜变量z
         y_t = None
-        y_s = []  # 用于保存源域的logits
-        labels_s = []  # 用于保存源域的标签
+        y_s = [] # 用于保存源域的logits
+        labels_s = []# 用于保存源域的标签
+        x_all = []# 用于保存源域和目标域的特征
 
         # 遍历每个域，针对每个源域进行训练
         for id in range(args.n_domains):  # 遍历每个源域
             domain_id = id
             is_target = domain_id == args.n_domains - 1  # 判断是否为目标域
 
-            if is_target:
-                continue
-
             # 获取当前域的样本数据
             index = d_all == id  # 获取当前域的样本
-            label_dom = label_all[index]
+            label_dom = label_all[index] if not is_target else None
             img_dom = img_all[index]
             d_dom = d_all[index]
+
+            # 特征提取
+            x_dom = model.backbone(img_dom, track_bn=is_target)
+            z, tilde_z, mu, log_var, logdet_u, _ = model.encode(x_dom, u=d_dom, track_bn=is_target)
+
+            # VAE KL Loss
+            q_dist = torch.distributions.Normal(mu, torch.exp(torch.clamp(log_var, min=-10) / 2))
+            log_qz = q_dist.log_prob(z)
+            log_pz = normal_distribution.log_prob(tilde_z) + logdet_u
+            kl = (log_qz.sum(dim=1) - log_pz).mean()
+
+             # 设置一个平滑的C值，以便在迭代过程中平滑调节
+            C = torch.clamp(torch.tensor(args.C_max) / args.C_stop_iter * total_iter, 0, args.C_max)
+            loss_kl = args.beta * (kl - C).abs()# 计算KL损失
 
             # 提取不稳定特征（style）
             _, style = extract_features(model, img_dom, d_dom,is_target)  # 提取可变特征
@@ -222,11 +293,37 @@ def train_unstable(train_source_iter: ForeverDataIterator,
             else:
                 y_t = logits# 如果是目标域，保存logit以便计算目标域的损失
 
+            losses_kl.append(loss_kl)
+            x_all.append(x_dom)
+            z_all.append(z)
+
+        x_all = torch.cat(x_all, 0) # 将所有域的特征合并
+        z_all = torch.cat(z_all, 0)# 合并所有的潜变量
+        x_all_hat = model.decode(z_all)# 解码潜变量，恢复图像
+
+        # vae loss
+        mean_loss_recon = F.mse_loss(x_all, x_all_hat, reduction='sum') / len(x_all)
+        mean_loss_kl = torch.stack(losses_kl, dim=0).mean()
+        mean_loss_vae = mean_loss_recon + mean_loss_kl
+
         # 分类损失
         mean_loss_cls = torch.stack(losses_cls, 0).mean()
 
-        # 总损失 = 分类损失
-        loss = mean_loss_cls
+        # entropy loss
+        loss_ent = torch.tensor(0.).to(device)
+        if args.lambda_ent > 0:
+            output_t = y_t
+            entropy = F.cross_entropy(output_t, torch.softmax(output_t, dim=1), reduction='none').detach()
+            index = torch.nonzero((entropy < args.entropy_thr).float()).squeeze(-1)
+            select_output_t = output_t[index]
+            if len(select_output_t) > 0:
+                loss_ent = F.cross_entropy(select_output_t, torch.softmax(select_output_t, dim=1))
+
+
+        # 总损失 = 分类损失 + VAE损失 + 熵损失
+        loss = mean_loss_cls \
+               + args.lambda_vae * mean_loss_vae \
+               + args.lambda_ent * loss_ent
 
         # 合并源域标签和预测结果，计算分类准确率
         y_s = torch.cat(y_s, 0)
@@ -235,6 +332,11 @@ def train_unstable(train_source_iter: ForeverDataIterator,
 
         cls_losses.update(mean_loss_cls.item(), y_s.size(0))  # 更新分类损失
         cls_accs.update(cls_acc.item(), y_s.size(0))  # 更新分类准确率
+
+        recon_losses.update(mean_loss_recon.item(), x_all.size(0))# 更新重建损失
+        vae_losses.update(mean_loss_vae.item(), x_all.size(0))# 更新VAE损失
+        ent_losses.update(loss_ent.item(), y_t.size(0))# 更新熵损失
+        kl_losses.update(mean_loss_kl.item(), x_all.size(0))# 更新KL损失
 
         # 反向传播并更新权重
         optimizer.zero_grad()
@@ -273,6 +375,10 @@ def train_unstable(train_source_iter: ForeverDataIterator,
                 "Unstable Model Train Loss": mean_loss_cls.item(),
                 "Unstable Model Train Accuracy": cls_acc.item(),
                 "Target Domain Accuracy": cls_t_acc.item(),
+                "Train Reconstruction Loss": mean_loss_recon.item(),
+                "Train VAE Loss": mean_loss_vae.item(),
+                "Entropy Loss": loss_ent.item(),
+                "Train KL": mean_loss_kl.item(),
             })
 
 
