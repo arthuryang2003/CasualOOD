@@ -191,11 +191,11 @@ def train_stable(train_source_iter: ForeverDataIterator,
             wandb.log({
                 "Stable Model Train Loss": mean_loss_cls.item(),
                 "Stable Model Train Accuracy": cls_acc.item(),
-                "Target Domain Accuracy": cls_t_acc.item(),
-                "Train Reconstruction Loss": mean_loss_recon.item(),
-                "Train VAE Loss": mean_loss_vae.item(),
-                "Entropy Loss": loss_ent.item(),
-                "Train KL": mean_loss_kl.item(),
+                "Stable Model Target Domain Accuracy": cls_t_acc.item(),
+                "Stable Model Train Reconstruction Loss": mean_loss_recon.item(),
+                "Stable Model Train VAE Loss": mean_loss_vae.item(),
+                "Stable Model Entropy Loss": loss_ent.item(),
+                "Stable Model Train KL": mean_loss_kl.item(),
 
             })
 
@@ -374,11 +374,11 @@ def train_unstable(train_source_iter: ForeverDataIterator,
             wandb.log({
                 "Unstable Model Train Loss": mean_loss_cls.item(),
                 "Unstable Model Train Accuracy": cls_acc.item(),
-                "Target Domain Accuracy": cls_t_acc.item(),
-                "Train Reconstruction Loss": mean_loss_recon.item(),
-                "Train VAE Loss": mean_loss_vae.item(),
-                "Entropy Loss": loss_ent.item(),
-                "Train KL": mean_loss_kl.item(),
+                "Unstable Model Target Domain Accuracy": cls_t_acc.item(),
+                "Unstable Model Train Reconstruction Loss": mean_loss_recon.item(),
+                "Unstable Model Train VAE Loss": mean_loss_vae.item(),
+                "Unstable Model Entropy Loss": loss_ent.item(),
+                "Unstable Model Train KL": mean_loss_kl.item(),
             })
 
 
@@ -491,6 +491,6 @@ def finetune_unstable_with_pseudo_labels(stable_model, unstable_model, train_tar
             wandb.log({
                 "Unstable Model Fine-tuning Loss": cls_losses.avg,
                 "Unstable Model Fine-tuning Accuracy": cls_accs.avg,
-                "Validation Loss": val_loss.item(),
-                "Validation Accuracy": val_acc.item(),
+                "Unstable Model Fine-tuning Validation Loss": val_loss.item(),
+                "Unstable Model Fine-tuning Validation Accuracy": val_acc.item(),
             })
