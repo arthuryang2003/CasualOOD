@@ -16,5 +16,5 @@ WANDB_MODE=online CUDA_VISIBLE_DEVICES=${device[0]} python main2.py --root=../..
 --train_batch_size=32 \
 --target_split_ratio=0.8 \
 --unstable_epochs=20 \
---stable_epochs=20 \
+--stable_epochs=20
 done
