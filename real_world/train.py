@@ -405,35 +405,8 @@ def finetune_unstable_with_pseudo_labels(stable_model, unstable_model, train_tar
     unstable_model.train()
     end = time.time()
 
-    # 获取目标域数据
-    img_t_all, labels_t_all, d_t_all, _ = next(train_target_iter)
-    img_t_all = img_t_all.to(device)
-    labels_t_all = labels_t_all.to(device)
-    d_t_all = d_t_all.to(device)
 
-    # 随机选取目标域数据的一部分作为训练数据
-    target_train_size = int(args.target_split_ratio* len(img_t_all))
-    target_train_idx = torch.randperm(len(img_t_all))[:target_train_size]
-    target_train_data = img_t_all[target_train_idx]
-    print(f"target_train_data1: {target_train_data.size()}")
-    target_train_labels = labels_t_all[target_train_idx]
 
-    # 剩下的部分数据用于验证
-    target_val_data = img_t_all[target_train_size:]
-    target_val_labels = labels_t_all[target_train_size:]
-    target_val_domains = d_t_all[target_train_size:] # 提取验证数据对应的域信息
-
-    # 提取目标域数据
-    target_val_data = target_val_data.to(device)
-    target_val_labels = target_val_labels.to(device)
-    target_val_domains = target_val_domains.to(device)
-
-    # 使用稳定模型生成伪标签
-    stable_model.eval()
-    with torch.no_grad():
-        # 获取稳定模型的输出并生成伪标签
-        stable_logits = stable_model.classifier(extract_features(stable_model, target_train_data, d_t_all[target_train_idx],True)[0])
-        pseudo_labels = torch.argmax(stable_logits, dim=1)
 
     # 微调不稳定模型
     unstable_model.train()
@@ -444,19 +417,47 @@ def finetune_unstable_with_pseudo_labels(stable_model, unstable_model, train_tar
 
         # 计时并加载数据
         data_time.update(time.time() - end)
-        img_t, labels_t, d_t, _ = next(train_target_iter)
-        img_t = img_t.to(device)
-        labels_t = labels_t.to(device)
 
-        # 只使用从目标域选出的训练数据
-        target_train_data = img_t[:target_train_size].to(device)
+        # 获取目标域数据
+        img_t_all, labels_t_all, d_t_all, _ = next(train_target_iter)
+        img_t_all = img_t_all.to(device)
+        labels_t_all = labels_t_all.to(device)
+        d_t_all = d_t_all.to(device)
 
-        print(f"target_train_data2: {target_train_data.size()}")
+        # 随机选取目标域数据的一部分作为训练数据
+        target_train_size = int(args.target_split_ratio * len(img_t_all))
+        target_train_idx = torch.randperm(len(img_t_all))[:target_train_size]
+        target_train_data = img_t_all[target_train_idx]
+        target_train_domains = d_t_all[:target_train_size]
+
+        target_train_data=target_train_data.to(device)
+        target_train_domains=target_train_domains.to(device)
+
+        # 剩下的部分数据用于验证
+        target_val_data = img_t_all[target_train_size:]
+        target_val_labels = labels_t_all[target_train_size:]
+        target_val_domains = d_t_all[target_train_size:]  # 提取验证数据对应的域信息
+
+        # 提取目标域数据
+        target_val_data = target_val_data.to(device)
+        target_val_labels = target_val_labels.to(device)
+        target_val_domains = target_val_domains.to(device)
+
+
+
+        # 使用稳定模型生成伪标签
+        stable_model.eval()
+        with torch.no_grad():
+            # 获取稳定模型的输出并生成伪标签
+            stable_logits = stable_model.classifier(
+                extract_features(stable_model, target_train_data, target_train_domains, True)[0])
+            pseudo_labels = torch.argmax(stable_logits, dim=1)
+
         pseudo_labels = pseudo_labels.to(device)  # 使用伪标签
 
         # 特征提取
         x_dom= unstable_model.backbone(target_train_data, track_bn=True)
-        z, tilde_z, mu, log_var, logdet_u, _ = unstable_model.encode(x_dom, u=args.n_domains-1, track_bn=True)
+        z, tilde_z, mu, log_var, logdet_u, _ = unstable_model.encode(x_dom, u=target_train_domains, track_bn=True)
 
         # VAE KL Loss
         q_dist = torch.distributions.Normal(mu, torch.exp(torch.clamp(log_var, min=-10) / 2))
@@ -471,7 +472,7 @@ def finetune_unstable_with_pseudo_labels(stable_model, unstable_model, train_tar
 
 
         # 提取不稳定特征（style）
-        _, style = extract_features(unstable_model, target_train_data, d_t[:target_train_size],True)  # 提取不变特征
+        _, style = extract_features(unstable_model, target_train_data, target_train_domains,True)  # 提取不变特征
 
         # 使用不稳定特征进行分类
         logits = unstable_model.classifier(style)  # 分类
