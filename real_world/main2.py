@@ -115,7 +115,7 @@ def main(args: argparse.Namespace):
 
     best_acc1 = 0.
     total_iter = 0
-    for epoch in range(args.epochs):
+    for epoch in range(args.stable_epochs):
         # 训练稳定特征模型
         train_stable(train_source_iter, train_target_iter, stable_model, stable_optimizer, stable_lr_scheduler, epoch, args, total_iter)
 
@@ -149,7 +149,7 @@ def main(args: argparse.Namespace):
 
     best_acc2 = 0.
     total_iter = 0
-    for epoch in range(args.epochs):
+    for epoch in range(args.unstable_epochs):
 
         # 训练不稳定特征模型
         train_unstable(train_source_iter, train_target_iter, unstable_model, unstable_optimizer, unstable_lr_scheduler, epoch, args, total_iter)
