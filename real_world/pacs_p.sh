@@ -11,7 +11,6 @@ WANDB_MODE=online CUDA_VISIBLE_DEVICES=${device[0]} python main2.py --root=../..
 --C_max=15 --beta=1 --lambda_vae=${lambda_vae[0]} --lambda_ent=0.1 \
 -i=1000 \
 --seed=${seed[i]} \
---epochs=20 \
 --finetune_epochs=10 \
 --train_batch_size=32 \
 --target_split_ratio=0.8 \
