@@ -405,12 +405,6 @@ def finetune_unstable_with_pseudo_labels(stable_model, unstable_model, train_tar
     unstable_model.train()
     end = time.time()
 
-
-
-
-    # 微调不稳定模型
-    unstable_model.train()
-
     for i in range(args.iters_per_epoch):
         total_iter += 1
         unstable_model.train()
