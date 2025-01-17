@@ -387,32 +387,38 @@ def finetune_unstable_with_pseudo_labels(stable_model, unstable_model, train_tar
     # 定义统计指标
     batch_time = AverageMeter('Time', ':5.2f')
     data_time = AverageMeter('Data', ':5.2f')
+    recon_losses = AverageMeter('Rec', ':4.2f')# 重建损失
+    vae_losses = AverageMeter('VAE', ':4.2f') # VAE损失
+    kl_losses = AverageMeter('KL', ':4.2f')# KL散度损失
+    ent_losses = AverageMeter('Ent', ':4.2f')  # 熵损失
     cls_losses = AverageMeter('Cls', ':4.2f')  # 分类损失
     cls_accs = AverageMeter('Cls Acc', ':3.1f')  # 分类准确率
+    val_accs = AverageMeter('Val Acc', ':3.1f') # 验证准确率
     progress = ProgressMeter(
         args.iters_per_epoch,
-        [batch_time, data_time, cls_losses, cls_accs],
+        [batch_time, data_time, cls_losses, ent_losses, vae_losses, recon_losses, kl_losses, cls_accs, val_accs],
         prefix="Unstable Model Fine-tuning Epoch: [{}]".format(epoch)
     )
+    normal_distribution = torch.distributions.MultivariateNormal(torch.zeros(args.z_dim).cuda(), torch.eye(args.z_dim).cuda())
 
     # 切换到训练模式
     unstable_model.train()
     end = time.time()
 
-    # 获取目标域数据并选择10%用于微调
+    # 获取目标域数据
     img_t_all, labels_t_all, d_t_all, _ = next(train_target_iter)
     img_t_all = img_t_all.to(device)
     labels_t_all = labels_t_all.to(device)
     d_t_all = d_t_all.to(device)
 
-    # 随机选取目标域数据的10%作为训练数据
-    target_train_size = int(0.1 * len(img_t_all))  # 10%的数据用于训练
+    # 随机选取目标域数据的一部分作为训练数据
+    target_train_size = int(args.target_split_ratio* len(img_t_all))
     target_train_idx = torch.randperm(len(img_t_all))[:target_train_size]
     target_train_data = img_t_all[target_train_idx]
-
+    print(f"target_train_data1: {target_train_data.size()}")
     target_train_labels = labels_t_all[target_train_idx]
 
-    # 剩下的90%数据用于验证
+    # 剩下的部分数据用于验证
     target_val_data = img_t_all[target_train_size:]
     target_val_labels = labels_t_all[target_train_size:]
     target_val_domains = d_t_all[target_train_size:] # 提取验证数据对应的域信息
@@ -442,9 +448,27 @@ def finetune_unstable_with_pseudo_labels(stable_model, unstable_model, train_tar
         img_t = img_t.to(device)
         labels_t = labels_t.to(device)
 
-        # 只使用从目标域选出的训练数据（10%）
+        # 只使用从目标域选出的训练数据
         target_train_data = img_t[:target_train_size].to(device)
+
+        print(f"target_train_data2: {target_train_data.size()}")
         pseudo_labels = pseudo_labels.to(device)  # 使用伪标签
+
+        # 特征提取
+        x_dom= unstable_model.backbone(target_train_data, track_bn=True)
+        z, tilde_z, mu, log_var, logdet_u, _ = unstable_model.encode(x_dom, u=args.n_domains-1, track_bn=True)
+
+        # VAE KL Loss
+        q_dist = torch.distributions.Normal(mu, torch.exp(torch.clamp(log_var, min=-10) / 2))
+        log_qz = q_dist.log_prob(z)
+        log_pz = normal_distribution.log_prob(tilde_z) + logdet_u
+        kl = (log_qz.sum(dim=1) - log_pz).mean()
+
+        # 设置一个平滑的C值，以便在迭代过程中平滑调节
+        C = torch.clamp(torch.tensor(args.C_max) / args.C_stop_iter * total_iter, 0, args.C_max)
+
+        loss_kl = args.beta * (kl - C).abs()  # 计算KL损失
+
 
         # 提取不稳定特征（style）
         _, style = extract_features(unstable_model, target_train_data, d_t[:target_train_size],True)  # 提取不变特征
@@ -452,13 +476,41 @@ def finetune_unstable_with_pseudo_labels(stable_model, unstable_model, train_tar
         # 使用不稳定特征进行分类
         logits = unstable_model.classifier(style)  # 分类
 
+        y_t = logits  # 如果是目标域，保存logit以便计算目标域的损失
+
+        x_hat = unstable_model.decode(z)# 解码潜变量，恢复图像
+
+        # vae loss
+        loss_recon = F.mse_loss(x_dom, x_hat, reduction='sum') / len(x_dom)
+
+        loss_vae = loss_recon + loss_kl
+
         # 计算交叉熵损失与伪标签之间的损失
-        loss = F.cross_entropy(logits, pseudo_labels)
+        loss_cls = F.cross_entropy(logits, pseudo_labels)
+
+        # entropy loss
+        loss_ent = torch.tensor(0.).to(device)
+        if args.lambda_ent > 0:
+            output_t = y_t
+            entropy = F.cross_entropy(output_t, torch.softmax(output_t, dim=1), reduction='none').detach()
+            index = torch.nonzero((entropy < args.entropy_thr).float()).squeeze(-1)
+            select_output_t = output_t[index]
+            if len(select_output_t) > 0:
+                loss_ent = F.cross_entropy(select_output_t, torch.softmax(select_output_t, dim=1))
+
+        # 总损失 = 分类损失 + VAE损失 + 熵损失
+        loss = loss_cls  \
+            + args.lambda_vae * loss_vae  \
+            + args.lambda_ent * loss_ent
 
         # 更新统计指标
         acc = accuracy(logits, pseudo_labels)[0]
-        cls_losses.update(loss.item(), target_train_data.size(0))
-        cls_accs.update(acc.item(), target_train_data.size(0))
+        cls_losses.update(loss_cls.item(), target_train_data.size(0))# 更新分类损失
+        recon_losses.update(loss_recon.item(), x_dom.size(0))  # 更新重建损失
+        vae_losses.update(loss_vae.item(), x_dom.size(0))# 更新VAE损失
+        ent_losses.update(loss_ent.item(), y_t.size(0))# 更新熵损失
+        kl_losses.update(loss_kl.item(), x_dom.size(0))# 更新KL损失
+        cls_accs.update(acc.item(), target_train_data.size(0))# 更新分类准确率
 
         # 反向传播并更新权重
         optimizer.zero_grad()
@@ -489,8 +541,15 @@ def finetune_unstable_with_pseudo_labels(stable_model, unstable_model, train_tar
 
             # 记录验证的损失和准确率
             wandb.log({
-                "Unstable Model Fine-tuning Loss": cls_losses.avg,
-                "Unstable Model Fine-tuning Accuracy": cls_accs.avg,
-                "Unstable Model Fine-tuning Validation Loss": val_loss.item(),
+
+                "Unstable Model Fine-tuning Loss": loss_cls.item(),
+                "Unstable Model Fine-tuning Accuracy": acc.item(),
+                "Unstable Model Fine-tuning Reconstruction Loss": loss_recon.item(),
+                "Unstable Model Fine-tuning VAE Loss": loss_vae.item(),
+                "Unstable Model Fine-tuning Entropy Loss": loss_ent.item(),
+                "Unstable Model Fine-tuning Train KL": loss_kl.item(),
                 "Unstable Model Fine-tuning Validation Accuracy": val_acc.item(),
+                "Unstable Model Fine-tuning Validation Loss": val_loss.item(),
+
+
             })

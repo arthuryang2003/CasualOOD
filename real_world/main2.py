@@ -183,7 +183,7 @@ def main(args: argparse.Namespace):
     acc2 = utils.validate(test_loader, unstable_model, args, device)
     print("Final Best Unstable Model test_acc2 = {:3.1f}".format(acc2))
 
-    best_acc3 = 0.
+    best_acc3 = best_acc2
     total_iter = 0
     for epoch in range(args.finetune_epochs):
 
@@ -197,7 +197,6 @@ def main(args: argparse.Namespace):
         acc3 = utils.validate(val_loader, unstable_model, args, device)
         print(' * Unstable Model Finetune Val  Acc@3 %.3f' % (acc3))
         wandb.log({"Unstable Model Finetune Val Acc": acc3})
-
         wandb.log({"Unstable Model Finetune Test Acc": acc3})
         message = '(epoch %d): Unstable Model Finetune Test Acc@3 %.3f' % (epoch + 1, acc3)
         print(message)
@@ -324,7 +323,12 @@ if __name__ == '__main__':
     parser.add_argument('--entropy_thr', type=float, default=0.5, metavar='N')
     parser.add_argument('--C_max', type=float, default=15., metavar='N')
     parser.add_argument('--C_stop_iter', type=int, default=10000, metavar='N')
-
+    parser.add_argument('--stable_epochs', type=int, default=20, metavar='N',
+                        help='number of stable epochs to run')
+    parser.add_argument('--unstable_epochs', type=int, default=20, metavar='N',
+                        help='number of unstable epochs to run')
+    parser.add_argument('--target_split_ratio', type=float, default=0.8, metavar='N',
+                        help='ratio of target domain data used for training set (rest for testing)')
 
     args = parser.parse_args()
     model_id = f"{args.data}_{args.target}/{args.name}"
