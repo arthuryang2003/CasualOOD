@@ -418,10 +418,9 @@ def finetune_unstable_with_pseudo_labels(stable_model, unstable_model, train_tar
         labels_t_all = labels_t_all.to(device)
         d_t_all = d_t_all.to(device)
 
-        # 随机选取目标域数据的一部分作为训练数据
+        # 选取目标域数据的一部分作为训练数据
         target_train_size = int(args.target_split_ratio * len(img_t_all))
-        target_train_idx = torch.randperm(len(img_t_all))[:target_train_size]
-        target_train_data = img_t_all[target_train_idx]
+        target_train_data = img_t_all[:target_train_size]
         target_train_domains = d_t_all[:target_train_size]
 
         target_train_data=target_train_data.to(device)
