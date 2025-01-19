@@ -60,11 +60,17 @@ def combined_inference(stable_model, unstable_model, test_loader,num_classes):
             # 稳定模型预测（sigmoid 输出概率）
             Y_stable = torch.sigmoid(stable_model(data,u))
             Xlogit = torch.logit(Y_stable, eps=1e-6)
+            Y_stable_hard = torch.argmax(Y_stable, dim=1)
+            # print(Y_stable_hard)
+
 
             # 不稳定模型预测并调整（sigmoid 输出 + 偏差校正）
             Y_unstable = torch.sigmoid(unstable_model(data,u))
-            Y_unstable_corrected = torch.matmul(Y_unstable, torch.inverse(e_matrix))
-            Y_unstable_corrected = torch.clamp(Y_unstable_corrected, min=0, max=1)
+
+            Y_unstable_corrected = least_squares_correction(Y_unstable, e_matrix)
+            # Y_unstable_corrected = torch.matmul(Y_unstable, torch.inverse(e_matrix))
+            # print(torch.argmax(Y_unstable, dim=1))
+            # Y_unstable_corrected = torch.clamp(Y_unstable_corrected, min=0, max=1)
             Ulogit = torch.logit(Y_unstable_corrected, eps=1e-6)
 
             # 联合预测：组合稳定模型和不稳定模型的对数几率
@@ -76,7 +82,7 @@ def combined_inference(stable_model, unstable_model, test_loader,num_classes):
 
             # 转换为硬标签（单标签分类选择最大概率）
             predicted = torch.argmax(predict, dim=1)
-            print(predicted)
+
             correct += (predicted == torch.argmax(labels, dim=1)).sum().item()
             total += labels.size(0)
 
@@ -84,3 +90,16 @@ def combined_inference(stable_model, unstable_model, test_loader,num_classes):
     accuracy = correct / total*100.0
     return accuracy
 
+
+# 最小二乘优化
+def least_squares_correction(Y_unstable, e_matrix):
+    # 初始校正值（随机或均匀分布）
+    p = torch.ones_like(Y_unstable) / Y_unstable.size(1)  # 初始概率分布
+
+    # 迭代优化
+    for i in range(10):  # 优化10次迭代
+        gradient = torch.matmul(e_matrix, p.T) - Y_unstable.T
+        p = p - 0.01 * gradient.T  # 学习率 0.01
+        p = F.softmax(p, dim=1)  # 确保 p 满足概率分布约束
+
+    return p
