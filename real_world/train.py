@@ -422,14 +422,16 @@ def finetune_unstable_with_pseudo_labels(stable_model, unstable_model, train_tar
         target_train_size = int(args.target_split_ratio * len(img_t_all))
         target_train_data = img_t_all[:target_train_size]
         target_train_domains = d_t_all[:target_train_size]
+        target_train_labels = labels_t_all[:target_train_size]
 
+        target_train_labels=target_train_labels.to(device)
         target_train_data=target_train_data.to(device)
         target_train_domains=target_train_domains.to(device)
 
         # 剩下的部分数据用于验证
         target_val_data = img_t_all[target_train_size:]
         target_val_labels = labels_t_all[target_train_size:]
-        target_val_domains = d_t_all[target_train_size:]  # 提取验证数据对应的域信息
+        target_val_domains = d_t_all[target_train_size:]
 
         # 提取目标域数据
         target_val_data = target_val_data.to(device)
@@ -525,10 +527,11 @@ def finetune_unstable_with_pseudo_labels(stable_model, unstable_model, train_tar
 
             with torch.no_grad():
                 # 使用不稳定特征模型进行验证
-                val_logits = unstable_model(target_val_data, target_val_domains)  # 补上域信息
+                val_logits = unstable_model(target_val_data, target_val_domains)
                 val_loss = F.cross_entropy(val_logits, target_val_labels)
                 val_acc = accuracy(val_logits, target_val_labels)[0]
-                progress.display(i)
+                val_accs.update(val_acc.item(), target_val_data.size(0))
+
             unstable_model.train()
 
             progress.display(i)
@@ -544,6 +547,4 @@ def finetune_unstable_with_pseudo_labels(stable_model, unstable_model, train_tar
                 "Unstable Model Fine-tuning Train KL": loss_kl.item(),
                 "Unstable Model Fine-tuning Validation Accuracy": val_acc.item(),
                 "Unstable Model Fine-tuning Validation Loss": val_loss.item(),
-
-
             })
