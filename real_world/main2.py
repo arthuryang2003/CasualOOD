@@ -30,7 +30,7 @@ from common.utils.logger import CompleteLogger
 from common.utils.analysis import collect_feature, tsne, a_distance
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-
+# os.environ['WANDB_MODE'] = 'dryrun'
 
 def main(args: argparse.Namespace):
     logger = CompleteLogger(args.log, args.phase)
@@ -98,6 +98,14 @@ def main(args: argparse.Namespace):
     print(unstable_optimizer.param_groups[0]['lr'], ' *** lr')
     unstable_lr_scheduler = LambdaLR(unstable_optimizer, lambda x: args.lr * (1. + args.lr_gamma * float(x)) ** (-args.lr_decay))
     print(unstable_optimizer.param_groups[0]['lr'], ' *** lr')
+
+
+    # 微调的优化器和学习率调度器
+    fintune_optimizer = SGD(unstable_model.get_parameters(),
+                            lr=args.lr, momentum=args.momentum, weight_decay=args.weight_decay, nesterov=True)
+    print(fintune_optimizer.param_groups[0]['lr'], ' *** lr')
+    finetune_lr_scheduler = LambdaLR(fintune_optimizer, lambda x: args.lr * (1. + args.lr_gamma * float(x)) ** (-args.lr_decay))
+    print(fintune_optimizer.param_groups[0]['lr'], ' *** lr')
 
 
     test_logger = '%s/test.txt' % (args.log)
@@ -189,7 +197,7 @@ def main(args: argparse.Namespace):
 
         # 训练不稳定特征模型
         finetune_unstable_with_pseudo_labels(stable_model, unstable_model, train_target_iter,
-         unstable_optimizer, unstable_lr_scheduler, epoch, args, total_iter)
+         fintune_optimizer, finetune_lr_scheduler, epoch, args, total_iter)
 
         total_iter += args.iters_per_epoch
 
@@ -282,13 +290,13 @@ if __name__ == '__main__':
                         help='number of data loading workers (default: 2)')
     parser.add_argument('--epochs', default=40, type=int, metavar='N',
                         help='number of total epochs to run')
-    parser.add_argument('-i', '--iters-per-epoch', default=2500, type=int,
+    parser.add_argument('-i', '--iters-per-epoch', default=1, type=int,
                         help='Number of iterations per epoch')
     parser.add_argument('-p', '--print-freq', default=100, type=int,
                         metavar='N', help='print frequency (default: 100)')
     parser.add_argument('-e', '--eval-freq', default=100, type=int,
                         metavar='N', help='print frequency (default: 100)')
-    parser.add_argument('--finetune_epochs', default=20, type=int, metavar='N',
+    parser.add_argument('--finetune_epochs', default=1, type=int, metavar='N',
                         help='number of finetune epochs to run')
 
     # 随机种子和评估选项
@@ -323,9 +331,9 @@ if __name__ == '__main__':
     parser.add_argument('--entropy_thr', type=float, default=0.5, metavar='N')
     parser.add_argument('--C_max', type=float, default=15., metavar='N')
     parser.add_argument('--C_stop_iter', type=int, default=10000, metavar='N')
-    parser.add_argument('--stable_epochs', type=int, default=20, metavar='N',
+    parser.add_argument('--stable_epochs', type=int, default=1, metavar='N',
                         help='number of stable epochs to run')
-    parser.add_argument('--unstable_epochs', type=int, default=20, metavar='N',
+    parser.add_argument('--unstable_epochs', type=int, default=1, metavar='N',
                         help='number of unstable epochs to run')
     parser.add_argument('--target_split_ratio', type=float, default=0.8, metavar='N',
                         help='ratio of target domain data used for training set (rest for testing)')
