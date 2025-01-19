@@ -401,6 +401,9 @@ def finetune_unstable_with_pseudo_labels(stable_model, unstable_model, train_tar
     )
     normal_distribution = torch.distributions.MultivariateNormal(torch.zeros(args.z_dim).cuda(), torch.eye(args.z_dim).cuda())
 
+    for param in stable_model.parameters():
+        param.requires_grad = False
+
     # 切换到训练模式
     unstable_model.train()
     end = time.time()
@@ -444,9 +447,14 @@ def finetune_unstable_with_pseudo_labels(stable_model, unstable_model, train_tar
         stable_model.eval()
         with torch.no_grad():
             # 获取稳定模型的输出并生成伪标签
-            stable_logits = stable_model.classifier(
-                extract_features(stable_model, target_train_data, target_train_domains, True)[0])
+            stable_logits = stable_model(target_train_data, target_train_domains)
             pseudo_labels = torch.argmax(stable_logits, dim=1)
+
+        # 计算伪标签与真实标签之间的准确率
+        correct = (pseudo_labels == target_train_labels).sum().item()  # 计算匹配的样本数
+        total = target_train_labels.size(0)  # 总样本数
+        stab_acc = correct / total * 100  # 准确率百分比
+
 
         pseudo_labels = pseudo_labels.to(device)  # 使用伪标签
 
@@ -522,6 +530,9 @@ def finetune_unstable_with_pseudo_labels(stable_model, unstable_model, train_tar
 
         # 每隔一定频率打印进度信息
         if i % args.print_freq == 0:
+
+            print("stab_acc:", stab_acc)
+
             # 切换到评估模式
             unstable_model.eval()
 
