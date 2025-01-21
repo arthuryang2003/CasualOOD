@@ -18,7 +18,7 @@ import torch.nn.functional as F
 import wandb
 
 from extract_features import extract_features
-from pseudo_label import combined_inference
+from pseudo_label import combined_inference,combined_inference_acc
 from train import  train_stable,train_unstable,finetune_unstable_with_pseudo_labels
 
 import utils
@@ -118,8 +118,38 @@ def main(args: argparse.Namespace):
 
         combined_acc = combined_inference(stable_model, unstable_model,
                                           test_loader,num_classes)
-        print("Final Combined Model Test Acc = {:3.1f}".format(combined_acc))
+        print("Final Combined Model Test Acc = {:3.2f}".format(combined_acc))
         return
+
+    best_acc2 = 0.
+    total_iter = 0
+    for epoch in range(args.unstable_epochs):
+
+        # 训练不稳定特征模型
+        train_unstable(train_source_iter, train_target_iter, unstable_model, unstable_optimizer, unstable_lr_scheduler, epoch, args, total_iter)
+
+        total_iter += args.iters_per_epoch
+
+        # 验证不稳定模型
+        acc2 = utils.validate(val_loader, unstable_model, args, device)
+        print(' * Unstable Model Val Acc@1 %.3f' % (acc2))
+        wandb.log({"Unstable Model Val Acc": acc2})
+        wandb.log({"Unstable Model Test Acc": acc2})
+        message = '(epoch %d): Unstable Model Test Acc@2 %.3f' % (epoch + 1, acc2)
+        print(message)
+        record = open(test_logger, 'a')
+        record.write(message + '\n')
+        record.close()
+
+        # remember best acc@1 and save checkpoint
+        torch.save(unstable_model.state_dict(), logger.get_checkpoint_path('latest_unstable'))
+
+        if acc2 > best_acc2:
+            shutil.copy(logger.get_checkpoint_path('latest_unstable'), logger.get_checkpoint_path('best_unstable'))
+        best_acc2= max(acc2, best_acc2)
+        wandb.run.summary["best_unstable_accuracy"] = best_acc2
+
+    print("best_acc2 = {:3.2f}".format(best_acc2))
 
     best_acc1 = 0.
     total_iter = 0
@@ -147,51 +177,21 @@ def main(args: argparse.Namespace):
         if acc1 > best_acc1:
             shutil.copy(logger.get_checkpoint_path('latest_stable'), logger.get_checkpoint_path('best_stable'))
         best_acc1 = max(acc1, best_acc1)
-        wandb.run.summary["best_accuracy"] = best_acc1
+        wandb.run.summary["best_stable_accuracy"] = best_acc1
 
-    print("best_acc1 = {:3.1f}".format(best_acc1))
+    print("best_acc1 = {:3.2f}".format(best_acc1))
+
     # 加载最佳稳定模型并评估
     stable_model.load_state_dict(torch.load(logger.get_checkpoint_path('best_stable')))
     acc1 = utils.validate(test_loader, stable_model, args, device)
-    print("Final Best Stable Model test_acc1 = {:3.1f}".format(acc1))
-
-    best_acc2 = 0.
-    total_iter = 0
-    for epoch in range(args.unstable_epochs):
-
-        # 训练不稳定特征模型
-        train_unstable(train_source_iter, train_target_iter, unstable_model, unstable_optimizer, unstable_lr_scheduler, epoch, args, total_iter)
-
-        total_iter += args.iters_per_epoch
-
-        # 验证不稳定模型
-        acc2 = utils.validate(val_loader, unstable_model, args, device)
-        print(' * Unstable Model Val Acc@1 %.3f' % (acc2))
-        wandb.log({"Unstable Model Val Acc": acc2})
-
-        wandb.log({"Unstable Model Test Acc": acc2})
-        message = '(epoch %d): Unstable Model Test Acc@2 %.3f' % (epoch + 1, acc2)
-        print(message)
-        record = open(test_logger, 'a')
-        record.write(message + '\n')
-        record.close()
-
-        # remember best acc@1 and save checkpoint
-        torch.save(unstable_model.state_dict(), logger.get_checkpoint_path('latest_unstable'))
-
-        if acc2 > best_acc2:
-            shutil.copy(logger.get_checkpoint_path('latest_unstable'), logger.get_checkpoint_path('best_unstable'))
-        best_acc2= max(acc2, best_acc2)
-        wandb.run.summary["best_accuracy"] = best_acc2
-
-    print("best_acc2 = {:3.1f}".format(best_acc2))
+    print("Final Best Stable Model test_acc1 = {:3.2f}".format(acc1))
 
     # 加载最佳稳定模型并评估
     unstable_model.load_state_dict(torch.load(logger.get_checkpoint_path('best_unstable')))
     acc2 = utils.validate(test_loader, unstable_model, args, device)
-    print("Final Best Unstable Model test_acc2 = {:3.1f}".format(acc2))
+    print("Final Best Unstable Model test_acc2 = {:3.2f}".format(acc2))
 
-    best_acc3 = best_acc2
+    best_acc3 = 0.
     total_iter = 0
     for epoch in range(args.finetune_epochs):
 
@@ -213,27 +213,27 @@ def main(args: argparse.Namespace):
         record.close()
 
         # remember best acc@1 and save checkpoint
-        torch.save(unstable_model.state_dict(), logger.get_checkpoint_path('latest_unstable'))
+        torch.save(unstable_model.state_dict(), logger.get_checkpoint_path('latest_unstable_finetune'))
 
         if acc3 > best_acc3:
-            shutil.copy(logger.get_checkpoint_path('latest_unstable'), logger.get_checkpoint_path('best_unstable'))
+            shutil.copy(logger.get_checkpoint_path('latest_unstable_finetune'), logger.get_checkpoint_path('best_unstable_finetune'))
         best_acc3= max(acc3, best_acc3)
         wandb.run.summary["best_accuracy"] = best_acc3
 
-    print("best_acc3 = {:3.1f}".format(best_acc3))
+    print("best_acc3 = {:3.2f}".format(best_acc3))
     # evaluate on test set
 
     # 加载最佳稳定模型并评估
-    unstable_model.load_state_dict(torch.load(logger.get_checkpoint_path('best_unstable')))
+    unstable_model.load_state_dict(torch.load(logger.get_checkpoint_path('best_unstable_finetune')))
     acc3 = utils.validate(test_loader, unstable_model, args, device)
-    print("Final Best Unstable Model After Fintune test_acc3 = {:3.1f}".format(acc3))
+    print("Final Best Unstable Model After Fintune test_acc3 = {:3.2f}".format(acc3))
 
     # 评估组合模型
 
-    combined_acc= combined_inference(stable_model, unstable_model, test_loader, num_classes)
+    combined_acc= combined_inference_acc(stable_model, unstable_model, test_loader, num_classes)
 
     # 分别打印准确率和 OOD
-    print("Final Combined Model Test Acc = {:3.1f}".format(combined_acc))
+    print("Final Combined Model Test Acc = {:3.2f}".format(combined_acc))
 
     logger.close()
 

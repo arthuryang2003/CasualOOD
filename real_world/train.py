@@ -28,8 +28,8 @@ def train_stable(train_source_iter: ForeverDataIterator,
     kl_losses = AverageMeter('KL', ':4.2f')# KL散度损失
     cls_losses = AverageMeter('Cls', ':4.2f')  # 分类损失
     ent_losses = AverageMeter('Ent', ':4.2f')# 熵损失
-    cls_accs = AverageMeter('Cls Acc', ':3.1f')  # 分类准确率
-    val_accs = AverageMeter('Val Acc', ':3.1f') # 验证准确率
+    cls_accs = AverageMeter('Cls Acc', ':3.2f')  # 分类准确率
+    val_accs = AverageMeter('Val Acc', ':3.2f') # 验证准确率
     progress = ProgressMeter(
         args.iters_per_epoch,
         [batch_time, data_time, cls_losses, ent_losses, vae_losses, recon_losses, kl_losses, cls_accs, val_accs],
@@ -211,8 +211,8 @@ def train_unstable(train_source_iter: ForeverDataIterator,
     kl_losses = AverageMeter('KL', ':4.2f')# KL散度损失
     cls_losses = AverageMeter('Cls', ':4.2f')  # 分类损失
     ent_losses = AverageMeter('Ent', ':4.2f')# 熵损失
-    cls_accs = AverageMeter('Cls Acc', ':3.1f')  # 分类准确率
-    val_accs = AverageMeter('Val Acc', ':3.1f')  # 验证准确率
+    cls_accs = AverageMeter('Cls Acc', ':3.2f')  # 分类准确率
+    val_accs = AverageMeter('Val Acc', ':3.2f')  # 验证准确率
     progress = ProgressMeter(
         args.iters_per_epoch,
         [batch_time, data_time, cls_losses, ent_losses, vae_losses, recon_losses, kl_losses, cls_accs, val_accs],
@@ -392,8 +392,8 @@ def finetune_unstable_with_pseudo_labels(stable_model, unstable_model, train_tar
     kl_losses = AverageMeter('KL', ':4.2f')# KL散度损失
     ent_losses = AverageMeter('Ent', ':4.2f')  # 熵损失
     cls_losses = AverageMeter('Cls', ':4.2f')  # 分类损失
-    cls_accs = AverageMeter('Cls Acc', ':3.1f')  # 分类准确率
-    val_accs = AverageMeter('Val Acc', ':3.1f') # 验证准确率
+    cls_accs = AverageMeter('Cls Acc', ':3.2f')  # 分类准确率
+    val_accs = AverageMeter('Val Acc', ':3.2f') # 验证准确率
     progress = ProgressMeter(
         args.iters_per_epoch,
         [batch_time, data_time, cls_losses, ent_losses, vae_losses, recon_losses, kl_losses, cls_accs, val_accs],
