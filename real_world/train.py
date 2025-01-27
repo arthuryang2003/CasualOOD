@@ -199,9 +199,9 @@ def train_stable(train_source_iter: ForeverDataIterator,
 
             })
 
-def train_unstable(train_source_iter: ForeverDataIterator,
+def train_unstable(stable_model,train_source_iter: ForeverDataIterator,
                    train_target_iter: ForeverDataIterator,
-                   model, optimizer: SGD, lr_scheduler: LambdaLR,
+                   unstable_model, optimizer: SGD, lr_scheduler: LambdaLR,
                    epoch: int, args: argparse.Namespace, total_iter):
     # 定义统计指标
     batch_time = AverageMeter('Time', ':5.2f')
@@ -222,12 +222,12 @@ def train_unstable(train_source_iter: ForeverDataIterator,
     normal_distribution = torch.distributions.MultivariateNormal(torch.zeros(args.z_dim).cuda(), torch.eye(args.z_dim).cuda())
 
     # 切换到训练模式
-    model.train()
+    unstable_model.train()
     end = time.time()
 
     for i in range(args.iters_per_epoch):
         total_iter += 1
-        model.train()
+        unstable_model.train()
 
         # 计时并加载数据
         data_time.update(time.time() - end)
@@ -266,8 +266,8 @@ def train_unstable(train_source_iter: ForeverDataIterator,
             d_dom = d_all[index]
 
             # 特征提取
-            x_dom = model.backbone(img_dom, track_bn=is_target)
-            z, tilde_z, mu, log_var, logdet_u, _ = model.encode(x_dom, u=d_dom, track_bn=is_target)
+            x_dom = unstable_model.backbone(img_dom, track_bn=is_target)
+            z, tilde_z, mu, log_var, logdet_u, _ = unstable_model.encode(x_dom, u=d_dom, track_bn=is_target)
 
             # VAE KL Loss
             q_dist = torch.distributions.Normal(mu, torch.exp(torch.clamp(log_var, min=-10) / 2))
@@ -280,10 +280,10 @@ def train_unstable(train_source_iter: ForeverDataIterator,
             loss_kl = args.beta * (kl - C).abs()# 计算KL损失
 
             # 提取不稳定特征（style）
-            _, style = extract_features(model, img_dom, d_dom,is_target)  # 提取可变特征
+            _, style = extract_features(unstable_model, img_dom, d_dom,is_target)  # 提取可变特征
 
             # 使用不稳定特征进行分类
-            logits = model.classifier(style)  # 分类
+            logits = unstable_model.classifier(style)  # 分类
 
             if not is_target:  # only source
                 # 计算交叉熵损失
@@ -291,6 +291,15 @@ def train_unstable(train_source_iter: ForeverDataIterator,
                 y_s.append(logits)
                 labels_s.append(label_dom)
             else:
+                # 使用稳定模型生成伪标签
+                stable_model.eval()
+                with torch.no_grad():
+                    # 获取稳定模型的输出并生成伪标签
+                    stable_logits = stable_model(img_dom, d_dom)
+                    pseudo_labels = torch.argmax(stable_logits, dim=1)
+                pseudo_labels = pseudo_labels.to(device)  # 使用伪标签
+                # 计算交叉熵损失
+                losses_cls.append(F.cross_entropy(logits, pseudo_labels))
                 y_t = logits# 如果是目标域，保存logit以便计算目标域的损失
 
             losses_kl.append(loss_kl)
@@ -299,7 +308,7 @@ def train_unstable(train_source_iter: ForeverDataIterator,
 
         x_all = torch.cat(x_all, 0) # 将所有域的特征合并
         z_all = torch.cat(z_all, 0)# 合并所有的潜变量
-        x_all_hat = model.decode(z_all)# 解码潜变量，恢复图像
+        x_all_hat = unstable_model.decode(z_all)# 解码潜变量，恢复图像
 
         # vae loss
         mean_loss_recon = F.mse_loss(x_all, x_all_hat, reduction='sum') / len(x_all)
@@ -353,7 +362,7 @@ def train_unstable(train_source_iter: ForeverDataIterator,
         # 每隔一定频率打印进度信息
         if i % args.print_freq == 0:
             # 切换到评估模式
-            model.eval()
+            unstable_model.eval()
 
             # 提取目标域数据
             img_t = img_all[d_all == args.n_domains - 1]
@@ -361,12 +370,12 @@ def train_unstable(train_source_iter: ForeverDataIterator,
 
             with torch.no_grad():
                 # 使用不稳定特征模型进行预测
-                y = model(img_t, d_all[d_all == args.n_domains - 1])
+                y = unstable_model(img_t, d_all[d_all == args.n_domains - 1])
                 cls_t_acc = accuracy(y, labels_t)[0]  # 计算目标域准确率
                 val_accs.update(cls_t_acc.item(), img_t.size(0))
 
             # 切换回训练模式
-            model.train()
+            unstable_model.train()
 
             # 打印进度并记录日志
             progress.display(i)

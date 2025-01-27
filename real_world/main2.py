@@ -134,8 +134,7 @@ def main(args: argparse.Namespace):
         print(' * Stable Model Val Acc@1 %.3f' % (acc1))
         wandb.log({"Stable Model Val Acc": acc1})
 
-        wandb.log({"Stable Model Test Acc": acc1})
-        message = '(epoch %d): Stable Model Test Acc@1 %.3f' % (epoch + 1, acc1)
+        message = '(epoch %d): Stable Model Val Acc@1 %.3f' % (epoch + 1, acc1)
         print(message)
         record = open(test_logger, 'a')
         record.write(message + '\n')
@@ -160,17 +159,22 @@ def main(args: argparse.Namespace):
     for epoch in range(args.unstable_epochs):
 
         # 训练不稳定特征模型
-        train_unstable(train_source_iter, train_target_iter, unstable_model, unstable_optimizer, unstable_lr_scheduler, epoch, args, total_iter)
+        train_unstable(stable_model,train_source_iter, train_target_iter, unstable_model, unstable_optimizer, unstable_lr_scheduler, epoch, args, total_iter)
 
         total_iter += args.iters_per_epoch
 
         # 验证不稳定模型
         acc2 = utils.validate(val_loader, unstable_model, args, device)
+        acc3 = combined_inference(stable_model, unstable_model, test_loader, num_classes)
         print(' * Unstable Model Val Acc@1 %.3f' % (acc2))
+
+        print(' * Combined Model Val Acc@1 %.3f' % (acc3))
+
         wandb.log({"Unstable Model Val Acc": acc2})
 
-        wandb.log({"Unstable Model Test Acc": acc2})
-        message = '(epoch %d): Unstable Model Test Acc@2 %.3f' % (epoch + 1, acc2)
+        wandb.log({"Combined Model Val Acc": acc3})
+
+        message = '(epoch %d): Combined Model Val Acc@2 %.3f' % (epoch + 1, acc3)
         print(message)
         record = open(test_logger, 'a')
         record.write(message + '\n')
@@ -179,9 +183,10 @@ def main(args: argparse.Namespace):
         # remember best acc@1 and save checkpoint
         torch.save(unstable_model.state_dict(), logger.get_checkpoint_path('latest_unstable'))
 
-        if acc2 > best_acc2:
+        if acc3 > best_acc2:
             shutil.copy(logger.get_checkpoint_path('latest_unstable'), logger.get_checkpoint_path('best_unstable'))
-        best_acc2= max(acc2, best_acc2)
+        best_acc2= max(acc3, best_acc2)
+
         wandb.run.summary["best_accuracy"] = best_acc2
 
     print("best_acc2 = {:3.2f}".format(best_acc2))
@@ -191,42 +196,42 @@ def main(args: argparse.Namespace):
     acc2 = utils.validate(test_loader, unstable_model, args, device)
     print("Final Best Unstable Model test_acc2 = {:3.2f}".format(acc2))
 
-    best_acc3 = best_acc2
-    total_iter = 0
-    for epoch in range(args.finetune_epochs):
-
-        # 训练不稳定特征模型
-        finetune_unstable_with_pseudo_labels(stable_model, unstable_model, train_target_iter,
-         fintune_optimizer, finetune_lr_scheduler, epoch, args, total_iter)
-
-        total_iter += args.iters_per_epoch
-
-        # 验证不稳定模型
-        acc3 = utils.validate(val_loader, unstable_model, args, device)
-        print(' * Unstable Model Finetune Val  Acc@3 %.3f' % (acc3))
-        wandb.log({"Unstable Model Finetune Val Acc": acc3})
-        wandb.log({"Unstable Model Finetune Test Acc": acc3})
-        message = '(epoch %d): Unstable Model Finetune Test Acc@3 %.3f' % (epoch + 1, acc3)
-        print(message)
-        record = open(test_logger, 'a')
-        record.write(message + '\n')
-        record.close()
-
-        # remember best acc@1 and save checkpoint
-        torch.save(unstable_model.state_dict(), logger.get_checkpoint_path('latest_unstable'))
-
-        if acc3 > best_acc3:
-            shutil.copy(logger.get_checkpoint_path('latest_unstable'), logger.get_checkpoint_path('best_unstable'))
-        best_acc3= max(acc3, best_acc3)
-        wandb.run.summary["best_accuracy"] = best_acc3
-
-    print("best_acc3 = {:3.2f}".format(best_acc3))
-    # evaluate on test set
-
-    # 加载最佳稳定模型并评估
-    unstable_model.load_state_dict(torch.load(logger.get_checkpoint_path('best_unstable')))
-    acc3 = utils.validate(test_loader, unstable_model, args, device)
-    print("Final Best Unstable Model After Fintune test_acc3 = {:3.2f}".format(acc3))
+    # best_acc3 = best_acc2
+    # total_iter = 0
+    # for epoch in range(args.finetune_epochs):
+    #
+    #     # 训练不稳定特征模型
+    #     finetune_unstable_with_pseudo_labels(stable_model, unstable_model, train_target_iter,
+    #      fintune_optimizer, finetune_lr_scheduler, epoch, args, total_iter)
+    #
+    #     total_iter += args.iters_per_epoch
+    #
+    #     # 验证不稳定模型
+    #     acc3 = utils.validate(val_loader, unstable_model, args, device)
+    #     print(' * Unstable Model Finetune Val  Acc@3 %.3f' % (acc3))
+    #     wandb.log({"Unstable Model Finetune Val Acc": acc3})
+    #     wandb.log({"Unstable Model Finetune Test Acc": acc3})
+    #     message = '(epoch %d): Unstable Model Finetune Test Acc@3 %.3f' % (epoch + 1, acc3)
+    #     print(message)
+    #     record = open(test_logger, 'a')
+    #     record.write(message + '\n')
+    #     record.close()
+    #
+    #     # remember best acc@1 and save checkpoint
+    #     torch.save(unstable_model.state_dict(), logger.get_checkpoint_path('latest_unstable'))
+    #
+    #     if acc3 > best_acc3:
+    #         shutil.copy(logger.get_checkpoint_path('latest_unstable'), logger.get_checkpoint_path('best_unstable'))
+    #     best_acc3= max(acc3, best_acc3)
+    #     wandb.run.summary["best_accuracy"] = best_acc3
+    #
+    # print("best_acc3 = {:3.2f}".format(best_acc3))
+    # # evaluate on test set
+    #
+    # # 加载最佳稳定模型并评估
+    # unstable_model.load_state_dict(torch.load(logger.get_checkpoint_path('best_unstable')))
+    # acc3 = utils.validate(test_loader, unstable_model, args, device)
+    # print("Final Best Unstable Model After Fintune test_acc3 = {:3.2f}".format(acc3))
 
     # 评估组合模型
 

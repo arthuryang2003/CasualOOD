@@ -9,7 +9,7 @@ WANDB_MODE=disabled CUDA_VISIBLE_DEVICES=${device[0]} python main2.py --root=../
 --name=PACS_test_To_A \
 --z_dim=64 --s_dim=${s_dim[0]} \
 --C_max=15 --beta=1 --lambda_vae=${lambda_vae[0]} --lambda_ent=0.1 \
--i=500 \
+-i=100 \
 --seed=${seed[i]} \
 --finetune_epochs=2 \
 --train_batch_size=16 \
