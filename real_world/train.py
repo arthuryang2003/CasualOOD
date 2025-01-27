@@ -145,7 +145,9 @@ def train_stable(train_source_iter: ForeverDataIterator,
         # 合并源域标签和预测结果，计算分类准确率
         y_s = torch.cat(y_s, 0)
         labels_s = torch.cat(labels_s, 0)
-        cls_acc = accuracy(y_s, labels_s)[0]
+        # cls_acc = accuracy(y_s, labels_s)[0]
+        hard_label_s=torch.argmax(y_s,dim=1)
+        cls_acc=(hard_label_s==labels_s).float().mean()*100
 
         cls_losses.update(mean_loss_cls.item(), y_s.size(0))  # 更新分类损失
         cls_accs.update(cls_acc.item(), y_s.size(0))  # 更新分类准确率
@@ -179,7 +181,9 @@ def train_stable(train_source_iter: ForeverDataIterator,
             with torch.no_grad():
                 # 使用稳定特征模型进行预测
                 y = model(img_t, d_all[d_all == args.n_domains - 1])
-                cls_t_acc = accuracy(y, labels_t)[0]  # 计算目标域准确率
+                hard_label_t=torch.argmax(y,dim=1)
+                cls_t_acc=(hard_label_t==labels_t).float().mean()*100
+                # cls_t_acc = accuracy(y, labels_t)[0]  # 计算目标域准确率
                 val_accs.update(cls_t_acc.item(), img_t.size(0))
 
             # 切换回训练模式
@@ -328,7 +332,9 @@ def train_unstable(train_source_iter: ForeverDataIterator,
         # 合并源域标签和预测结果，计算分类准确率
         y_s = torch.cat(y_s, 0)
         labels_s = torch.cat(labels_s, 0)
-        cls_acc = accuracy(y_s, labels_s)[0]
+        # cls_acc = accuracy(y_s, labels_s)[0]
+        hard_label_s=torch.argmax(y_s,dim=1)
+        cls_acc=(hard_label_s==labels_s).float().mean()*100
 
         cls_losses.update(mean_loss_cls.item(), y_s.size(0))  # 更新分类损失
         cls_accs.update(cls_acc.item(), y_s.size(0))  # 更新分类准确率
@@ -362,7 +368,9 @@ def train_unstable(train_source_iter: ForeverDataIterator,
             with torch.no_grad():
                 # 使用不稳定特征模型进行预测
                 y = model(img_t, d_all[d_all == args.n_domains - 1])
-                cls_t_acc = accuracy(y, labels_t)[0]  # 计算目标域准确率
+                hard_label_t=torch.argmax(y,dim=1)
+                cls_t_acc=(hard_label_t==labels_t).float().mean()*100
+                # cls_t_acc = accuracy(y, labels_t)[0]  # 计算目标域准确率
                 val_accs.update(cls_t_acc.item(), img_t.size(0))
 
             # 切换回训练模式
@@ -508,6 +516,7 @@ def finetune_unstable_with_pseudo_labels(stable_model, unstable_model, train_tar
             + args.lambda_ent * loss_ent
 
         # 更新统计指标
+        
         acc = accuracy(logits, pseudo_labels)[0]
         cls_losses.update(loss_cls.item(), target_train_data.size(0))# 更新分类损失
         recon_losses.update(loss_recon.item(), x_dom.size(0))  # 更新重建损失

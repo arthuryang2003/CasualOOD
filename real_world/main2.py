@@ -212,12 +212,15 @@ def main(args: argparse.Namespace):
         record.write(message + '\n')
         record.close()
 
+        combined_acc= combined_inference_acc(stable_model, unstable_model, test_loader, num_classes)
+        wandb.log({"Combined Model Test Acc": combined_acc})
+
         # remember best acc@1 and save checkpoint
         torch.save(unstable_model.state_dict(), logger.get_checkpoint_path('latest_unstable_finetune'))
 
-        if acc3 > best_acc3:
+        if combined_acc > best_acc3:
             shutil.copy(logger.get_checkpoint_path('latest_unstable_finetune'), logger.get_checkpoint_path('best_unstable_finetune'))
-        best_acc3= max(acc3, best_acc3)
+        best_acc3= max(combined_acc, best_acc3)
         wandb.run.summary["best_accuracy"] = best_acc3
 
     print("best_acc3 = {:3.2f}".format(best_acc3))

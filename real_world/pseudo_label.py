@@ -65,7 +65,6 @@ def combined_inference(stable_model, unstable_model, data, labels, num_classes):
         # 转换为硬标签（单标签分类选择最大概率）
         predicted = torch.argmax(predict, dim=1)
 
-
     return combined_logit
 
 
