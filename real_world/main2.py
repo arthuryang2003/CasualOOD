@@ -121,34 +121,34 @@ def main(args: argparse.Namespace):
         print("Final Combined Model Test Acc = {:3.2f}".format(combined_acc))
         return
 
-    best_acc1 = 0.
-    total_iter = 0
-    for epoch in range(args.stable_epochs):
-        # 训练稳定特征模型
-        train_stable(train_source_iter, train_target_iter, stable_model, stable_optimizer, stable_lr_scheduler, epoch, args, total_iter)
-
-        total_iter += args.iters_per_epoch
-
-        # 验证稳定模型
-        acc1 = utils.validate(val_loader, stable_model, args, device)
-        print(' * Stable Model Val Acc@1 %.3f' % (acc1))
-        wandb.log({"Stable Model Val Acc": acc1})
-
-        message = '(epoch %d): Stable Model Val Acc@1 %.3f' % (epoch + 1, acc1)
-        print(message)
-        record = open(test_logger, 'a')
-        record.write(message + '\n')
-        record.close()
-
-        # remember best acc@1 and save checkpoint
-        torch.save(stable_model.state_dict(), logger.get_checkpoint_path('latest_stable'))
-
-        if acc1 > best_acc1:
-            shutil.copy(logger.get_checkpoint_path('latest_stable'), logger.get_checkpoint_path('best_stable'))
-        best_acc1 = max(acc1, best_acc1)
-        wandb.run.summary["best_accuracy"] = best_acc1
-
-    print("best_acc1 = {:3.2f}".format(best_acc1))
+    # best_acc1 = 0.
+    # total_iter = 0
+    # for epoch in range(args.stable_epochs):
+    #     # 训练稳定特征模型
+    #     train_stable(train_source_iter, train_target_iter, stable_model, stable_optimizer, stable_lr_scheduler, epoch, args, total_iter)
+    #
+    #     total_iter += args.iters_per_epoch
+    #
+    #     # 验证稳定模型
+    #     acc1 = utils.validate(val_loader, stable_model, args, device)
+    #     print(' * Stable Model Val Acc@1 %.3f' % (acc1))
+    #     wandb.log({"Stable Model Val Acc": acc1})
+    #
+    #     message = '(epoch %d): Stable Model Val Acc@1 %.3f' % (epoch + 1, acc1)
+    #     print(message)
+    #     record = open(test_logger, 'a')
+    #     record.write(message + '\n')
+    #     record.close()
+    #
+    #     # remember best acc@1 and save checkpoint
+    #     torch.save(stable_model.state_dict(), logger.get_checkpoint_path('latest_stable'))
+    #
+    #     if acc1 > best_acc1:
+    #         shutil.copy(logger.get_checkpoint_path('latest_stable'), logger.get_checkpoint_path('best_stable'))
+    #     best_acc1 = max(acc1, best_acc1)
+    #     wandb.run.summary["best_accuracy"] = best_acc1
+    #
+    # print("best_acc1 = {:3.2f}".format(best_acc1))
     # 加载最佳稳定模型并评估
     stable_model.load_state_dict(torch.load(logger.get_checkpoint_path('best_stable')))
     acc1 = utils.validate(test_loader, stable_model, args, device)

@@ -97,7 +97,7 @@ def least_squares_correction(Y_unstable, e_matrix):
     p = torch.ones_like(Y_unstable) / Y_unstable.size(1)  # 初始概率分布
 
     # 迭代优化
-    for i in range(10):  # 优化10次迭代
+    for i in range(10):
         gradient = torch.matmul(e_matrix, p.T) - Y_unstable.T
         p = p - 0.01 * gradient.T  # 学习率 0.01
         p = F.softmax(p, dim=1)  # 确保 p 满足概率分布约束

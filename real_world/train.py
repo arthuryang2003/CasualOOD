@@ -266,7 +266,7 @@ def train_unstable(stable_model,train_source_iter: ForeverDataIterator,
 
             # 获取当前域的样本数据
             index = d_all == id  # 获取当前域的样本
-            label_dom = label_all[index] if not is_target else None
+            label_dom = label_all[index]
             img_dom = img_all[index]
             d_dom = d_all[index]
 
@@ -303,8 +303,8 @@ def train_unstable(stable_model,train_source_iter: ForeverDataIterator,
                     pseudo_labels = torch.argmax(stable_logits, dim=1)
                 pseudo_labels = pseudo_labels.to(device)  # 使用伪标签
                 # 计算伪标签与真实标签之间的准确率
-                correct = (pseudo_labels == target_train_labels).sum().item()  # 计算匹配的样本数
-                total = target_train_labels.size(0)  # 总样本数
+                correct = (pseudo_labels == label_dom).sum().item()  # 计算匹配的样本数
+                total = d_dom.size(0)  # 总样本数
                 stab_acc = correct / total * 100  # 准确率百分比
 
                 # 计算交叉熵损失
