@@ -118,7 +118,7 @@ def main(args: argparse.Namespace):
 
         combined_acc = combined_inference(stable_model, unstable_model,
                                           test_loader,num_classes)
-        print("Final Combined Model Test Acc = {:3.1f}".format(combined_acc))
+        print("Final Combined Model Test Acc = {:3.2f}".format(combined_acc))
         return
 
     best_acc1 = 0.
@@ -149,11 +149,11 @@ def main(args: argparse.Namespace):
         best_acc1 = max(acc1, best_acc1)
         wandb.run.summary["best_accuracy"] = best_acc1
 
-    print("best_acc1 = {:3.1f}".format(best_acc1))
+    print("best_acc1 = {:3.2f}".format(best_acc1))
     # 加载最佳稳定模型并评估
     stable_model.load_state_dict(torch.load(logger.get_checkpoint_path('best_stable')))
     acc1 = utils.validate(test_loader, stable_model, args, device)
-    print("Final Best Stable Model test_acc1 = {:3.1f}".format(acc1))
+    print("Final Best Stable Model test_acc1 = {:3.2f}".format(acc1))
 
     best_acc2 = 0.
     total_iter = 0
@@ -184,12 +184,12 @@ def main(args: argparse.Namespace):
         best_acc2= max(acc2, best_acc2)
         wandb.run.summary["best_accuracy"] = best_acc2
 
-    print("best_acc2 = {:3.1f}".format(best_acc2))
+    print("best_acc2 = {:3.2f}".format(best_acc2))
 
     # 加载最佳稳定模型并评估
     unstable_model.load_state_dict(torch.load(logger.get_checkpoint_path('best_unstable')))
     acc2 = utils.validate(test_loader, unstable_model, args, device)
-    print("Final Best Unstable Model test_acc2 = {:3.1f}".format(acc2))
+    print("Final Best Unstable Model test_acc2 = {:3.2f}".format(acc2))
 
     best_acc3 = best_acc2
     total_iter = 0
@@ -220,20 +220,20 @@ def main(args: argparse.Namespace):
         best_acc3= max(acc3, best_acc3)
         wandb.run.summary["best_accuracy"] = best_acc3
 
-    print("best_acc3 = {:3.1f}".format(best_acc3))
+    print("best_acc3 = {:3.2f}".format(best_acc3))
     # evaluate on test set
 
     # 加载最佳稳定模型并评估
     unstable_model.load_state_dict(torch.load(logger.get_checkpoint_path('best_unstable')))
     acc3 = utils.validate(test_loader, unstable_model, args, device)
-    print("Final Best Unstable Model After Fintune test_acc3 = {:3.1f}".format(acc3))
+    print("Final Best Unstable Model After Fintune test_acc3 = {:3.2f}".format(acc3))
 
     # 评估组合模型
 
     combined_acc= combined_inference(stable_model, unstable_model, test_loader, num_classes)
 
     # 分别打印准确率和 OOD
-    print("Final Combined Model Test Acc = {:3.1f}".format(combined_acc))
+    print("Final Combined Model Test Acc = {:3.2f}".format(combined_acc))
 
     logger.close()
 
