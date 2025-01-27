@@ -221,6 +221,9 @@ def train_unstable(stable_model,train_source_iter: ForeverDataIterator,
 
     normal_distribution = torch.distributions.MultivariateNormal(torch.zeros(args.z_dim).cuda(), torch.eye(args.z_dim).cuda())
 
+    for param in stable_model.parameters():
+        param.requires_grad = False
+
     stable_model.eval()
 
     # 切换到训练模式
@@ -369,6 +372,8 @@ def train_unstable(stable_model,train_source_iter: ForeverDataIterator,
 
         # 每隔一定频率打印进度信息
         if i % args.print_freq == 0:
+
+            print("stab_acc:", stab_acc)
             # 切换到评估模式
             unstable_model.eval()
 
