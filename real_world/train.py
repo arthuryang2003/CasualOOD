@@ -221,6 +221,8 @@ def train_unstable(stable_model,train_source_iter: ForeverDataIterator,
 
     normal_distribution = torch.distributions.MultivariateNormal(torch.zeros(args.z_dim).cuda(), torch.eye(args.z_dim).cuda())
 
+    stable_model.eval()
+
     # 切换到训练模式
     unstable_model.train()
     end = time.time()
@@ -292,14 +294,20 @@ def train_unstable(stable_model,train_source_iter: ForeverDataIterator,
                 labels_s.append(label_dom)
             else:
                 # 使用稳定模型生成伪标签
-                stable_model.eval()
                 with torch.no_grad():
                     # 获取稳定模型的输出并生成伪标签
                     stable_logits = stable_model(img_dom, d_dom)
                     pseudo_labels = torch.argmax(stable_logits, dim=1)
                 pseudo_labels = pseudo_labels.to(device)  # 使用伪标签
+                # 计算伪标签与真实标签之间的准确率
+                correct = (pseudo_labels == target_train_labels).sum().item()  # 计算匹配的样本数
+                total = target_train_labels.size(0)  # 总样本数
+                stab_acc = correct / total * 100  # 准确率百分比
+
                 # 计算交叉熵损失
                 losses_cls.append(F.cross_entropy(logits, pseudo_labels))
+                y_s.append(logits)
+                labels_s.append(pseudo_labels)
                 y_t = logits# 如果是目标域，保存logit以便计算目标域的损失
 
             losses_kl.append(loss_kl)
@@ -414,6 +422,7 @@ def finetune_unstable_with_pseudo_labels(stable_model, unstable_model, train_tar
         param.requires_grad = False
 
     # 切换到训练模式
+    stable_model.eval()
     unstable_model.train()
     end = time.time()
 
@@ -453,7 +462,7 @@ def finetune_unstable_with_pseudo_labels(stable_model, unstable_model, train_tar
 
 
         # 使用稳定模型生成伪标签
-        stable_model.eval()
+
         with torch.no_grad():
             # 获取稳定模型的输出并生成伪标签
             stable_logits = stable_model(target_train_data, target_train_domains)
