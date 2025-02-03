@@ -19,7 +19,7 @@ from common.vision.transforms import ResizeImage
 from common.utils.metric import accuracy, ConfusionMatrix
 from common.utils.meter import AverageMeter, ProgressMeter
 from torchvision.utils import save_image
-from extract_features import extract_features
+
 
 
 def get_model_names():
@@ -122,11 +122,13 @@ def get_dataset(dataset_name, root, source, target, train_source_transform, val_
             x.domain_ids = domain_ids
             return x
 
-        train_source_dataset = concat_dataset(root=root, tasks=source, download=True, split='train',phase='train', transform=train_source_transform)
-        train_target_dataset = concat_dataset(root=root, tasks=target, download=True, split='train',phase='train', transform=train_target_transform)
-        val_dataset = concat_dataset(root=root, tasks=source, download=True, split='test',phase='val', transform=val_transform)
-        test_dataset = concat_dataset(root=root, tasks=target, split='all', phase='test',download=True, transform=val_transform)
-
+        train_source_dataset = concat_dataset(root=root, tasks=source, download=True, phase='train', transform=train_source_transform)
+        train_target_dataset = concat_dataset(root=root, tasks=target, download=True, phase='train', transform=train_target_transform)
+        val_dataset = concat_dataset(root=root, tasks=target, download=True, phase='val', transform=val_transform)
+        if dataset_name == 'DomainNet':
+            test_dataset = concat_dataset(root=root, tasks=target, split='test', phase='test',download=True, transform=val_transform)
+        else:
+            test_dataset = val_dataset
         class_names = train_source_dataset.datasets[0].classes
         num_classes = len(class_names)
     else:
@@ -137,62 +139,7 @@ def get_dataset(dataset_name, root, source, target, train_source_transform, val_
         train_source_dataset = convert_from_wilds_dataset(dataset.get_subset('train', transform=train_source_transform))
         train_target_dataset = convert_from_wilds_dataset(dataset.get_subset('test', transform=train_target_transform))
         val_dataset = test_dataset = convert_from_wilds_dataset(dataset.get_subset('test', transform=val_transform))
-    return train_source_dataset, val_dataset, test_dataset, num_classes, class_names
-
-
-def validate_classifier(vae_model, stable_classifier, unstable_classifier, val_loader, args, device):
-    # 定义统计指标
-    batch_time = AverageMeter('Time', ':6.3f')
-    stable_losses = AverageMeter('Loss', ':.4e')
-    unstable_losses = AverageMeter('Loss', ':.4e')
-    top1_stable = AverageMeter('Stable Acc@1', ':6.2f')
-    top1_unstable = AverageMeter('Unstable Acc@1', ':6.2f')
-    progress = ProgressMeter(
-        len(val_loader),
-        [batch_time, stable_losses,unstable_losses, top1_stable, top1_unstable],
-        prefix='Validation: ')
-
-    # 切换到评估模式
-    stable_classifier.eval()
-    unstable_classifier.eval()
-
-    with torch.no_grad():
-        end = time.time()
-
-        for i, data in enumerate(val_loader):
-            images, target = data[0], data[1]
-            images = images.to(device)
-            target = target.to(device)
-
-            # 使用VAE模型提取特征
-            content, style = extract_features(vae_model, images, target)
-
-            # 使用稳定分类器进行预测
-            stable_output = stable_classifier(content)
-            stable_loss = F.cross_entropy(stable_output, target)
-
-            # 使用不稳定分类器进行预测
-            unstable_output = unstable_classifier(style)
-            unstable_loss = F.cross_entropy(unstable_output, target)
-
-            # 计算准确率
-            stable_acc, = accuracy(stable_output, target, topk=(1,))
-            unstable_acc, = accuracy(unstable_output, target, topk=(1,))
-
-            # 更新统计
-            stable_losses.update(stable_loss.item(), images.size(0))
-            unstable_losses.update(unstable_loss.item(), images.size(0))
-            top1_stable.update(stable_acc.item(), images.size(0))
-            top1_unstable.update(unstable_acc.item(), images.size(0))
-
-            # 计时
-            batch_time.update(time.time() - end)
-            end = time.time()
-
-            if i % args.print_freq == 0:
-                progress.display(i)
-
-    return top1_stable.avg, top1_unstable.avg
+    return train_source_dataset, train_target_dataset, val_dataset, test_dataset, num_classes, class_names
 
 
 def validate(val_loader, model, args, device) -> float:
