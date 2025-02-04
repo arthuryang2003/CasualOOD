@@ -216,11 +216,11 @@ def validate(val_loader, model, args, device) -> float:
         for i, data in enumerate(val_loader):
             images = data[0]
             target = data[1]
+            u=data[2]
             images = images.to(device)
             target = target.to(device)
+            u =u.to(device)
 
-            # compute output
-            u = torch.ones([len(images)]).long().to(device)
             output = model(images, u=u)
             loss = F.cross_entropy(output, target)
 
