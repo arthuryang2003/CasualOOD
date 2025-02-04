@@ -260,7 +260,7 @@ def validate(val_loader, model, args, total_iter,device) -> float:
             # Update meters
             losses_vae.update(mean_loss_vae.item(), images.size(0))
             losses_cls.update(cls_loss.item(), images.size(0))
-            losses_kl.update(kl.item(), images.size(0))
+            losses_kl.update(loss_kl.item(), images.size(0))
             losses_recon.update(recon_loss.item(), images.size(0))
             total_loss.update(total_val_loss.item(), images.size(0))
 
