@@ -50,8 +50,7 @@ class PACS(ImageList):
     def __init__(self, root: str, task: str, split='all', download: Optional[bool] = True, **kwargs):
         assert task in self.image_list
         assert split in ["train", "val", "all", "test"]
-        if split == "test":
-            split = "all"
+
         data_list_file = os.path.join(root, self.image_list[task].format(split))
 
         if download:
