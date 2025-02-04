@@ -6,6 +6,33 @@ from torch.nn import Parameter
 import numpy as np
 import itertools
 
+
+class Classifier(nn.Module):
+    def __init__(self, args, input_size):
+        super(Classifier, self).__init__()
+
+        # 使用args初始化hidden_dim和num_classes
+        dim = args.hidden_dim
+        self.num_classes = args.num_classes
+
+        # 确保input_size（即c_dim或s_dim）已传入
+        if input_size is None:
+            raise ValueError("Input size (c_dim or s_dim) must be provided.")
+
+        # 定义分类器
+        self.classifier = nn.Sequential(
+            nn.Linear(input_size, dim),  # 输入为c_dim或s_dim
+            nn.BatchNorm1d(dim),
+            nn.ReLU(),
+            nn.Dropout(),
+            nn.Linear(dim, self.num_classes)  # 输出类别数
+        )
+
+    def forward(self, x):
+        return self.classifier(x)
+
+
+
 class MLP(nn.Module):
     def __init__(self, input_dim, output_dim, n_layers=1, hidden_dim=1024):
         super(MLP, self).__init__()
@@ -122,9 +149,9 @@ class iVAE(nn.Module):
 
         # sample z
         h = self.encoder(x)
-        mu, log_var = self.fc_mu(h), self.fc_logvar(h)
+        mu, log_var = self.fc_mu(h), self.fc_logvar(h) # 计算潜变量 z 的均值和对数方差
         if self.training or self.lambda_vae != 0:
-            z = self.reparameterize(mu, log_var)
+            z = self.reparameterize(mu, log_var)# 使用 reparameterization trick 采样 z
         else:
             z = mu
         

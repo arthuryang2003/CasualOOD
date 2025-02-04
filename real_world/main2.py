@@ -19,10 +19,10 @@ import wandb
 
 from extract_features import extract_features
 from pseudo_label import combined_inference
-from train import  train_stable,train_unstable,finetune_unstable_with_pseudo_labels
+from train import  train_stable,train_unstable,train_VAE
 
 import utils
-from common.modules.networks import iVAE
+from common.modules.networks import iVAE,Classifier
 from common.utils.data import ForeverDataIterator
 from common.utils.metric import accuracy
 from common.utils.meter import AverageMeter, ProgressMeter
@@ -30,7 +30,7 @@ from common.utils.logger import CompleteLogger
 from common.utils.analysis import collect_feature, tsne, a_distance
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-# os.environ['WANDB_MODE'] = 'dryrun'
+os.environ['WANDB_MODE'] = 'dryrun'
 
 def main(args: argparse.Namespace):
     logger = CompleteLogger(args.log, args.phase)
@@ -57,182 +57,193 @@ def main(args: argparse.Namespace):
     print("train_transform: ", train_transform)
     print("val_transform: ", val_transform)
 
-    train_source_dataset, train_target_dataset, val_dataset, test_dataset, args.num_classes, args.class_names = \
+    train_source_dataset, val_dataset, test_dataset, args.num_classes, args.class_names = \
         utils.get_dataset(args.data, args.root, args.source, args.target, train_transform, val_transform)
     train_source_loader = DataLoader(train_source_dataset, batch_size=(args.n_domains-1)*args.train_batch_size,
                                      num_workers=args.workers, drop_last=True,
                                      #sampler=_make_balanced_sampler(train_source_dataset.domain_ids)
                                      shuffle=True,
                                      )
-    train_target_loader = DataLoader(train_target_dataset, batch_size=args.batch_size,
-                                     shuffle=True, num_workers=args.workers, drop_last=True,
-                                     )
+
     val_loader = DataLoader(val_dataset, batch_size=args.batch_size, shuffle=False, num_workers=args.workers)
     test_loader = DataLoader(test_dataset, batch_size=args.batch_size, shuffle=False, num_workers=args.workers)
 
     train_source_iter = ForeverDataIterator(train_source_loader)
-    train_target_iter = ForeverDataIterator(train_target_loader)
+    val_iter = ForeverDataIterator(val_loader)
 
     # 通过目标数据集计算类别数量
-    num_classes = len(set(train_source_dataset.datasets[0].classes))
+    num_classes = args.num_classes
 
-    print(f"num_classes: {num_classes}")
 
     print("=> using model '{}'".format(args.arch))
     backbone = utils.get_model(args.arch, pretrain=not args.scratch)
 
-    # 初始化稳定模型和不稳定模型
-    stable_model = iVAE(args, backbone_net=backbone).to(device)  
-    unstable_model = iVAE(args, backbone_net=backbone).to(device) 
+    VAE_model=iVAE(args, backbone_net=backbone).to(device)
+    # define optimizer and lr scheduler
+    vae_optimizer = SGD(VAE_model.get_parameters(),
+                    lr=args.lr, momentum=args.momentum, weight_decay=args.weight_decay, nesterov=True)
 
-    # 稳定模型的优化器和学习率调度器
-    stable_optimizer = SGD(stable_model.get_parameters(),
-                        lr=args.lr, momentum=args.momentum, weight_decay=args.weight_decay, nesterov=True)
-    print(stable_optimizer.param_groups[0]['lr'], ' *** lr')
-    stable_lr_scheduler = LambdaLR(stable_optimizer, lambda x: args.lr * (1. + args.lr_gamma * float(x)) ** (-args.lr_decay))
-    print(stable_optimizer.param_groups[0]['lr'], ' *** lr')
+    print(vae_optimizer.param_groups[0]['lr'], ' *** lr')
+    lr_scheduler = LambdaLR(vae_optimizer, lambda x:  args.lr * (1. + args.lr_gamma * float(x)) ** (-args.lr_decay))
+    print(vae_optimizer.param_groups[0]['lr'], ' *** lr')
 
-    # 不稳定模型的优化器和学习率调度器
-    unstable_optimizer = SGD(unstable_model.get_parameters(),
-                            lr=args.lr, momentum=args.momentum, weight_decay=args.weight_decay, nesterov=True)
-    print(unstable_optimizer.param_groups[0]['lr'], ' *** lr')
-    unstable_lr_scheduler = LambdaLR(unstable_optimizer, lambda x: args.lr * (1. + args.lr_gamma * float(x)) ** (-args.lr_decay))
-    print(unstable_optimizer.param_groups[0]['lr'], ' *** lr')
+    # 初始化稳定分类器和不稳定分类器
+    stable_classifier = Classifier(args, input_size=args.c_dim).to(device)  # 稳定模型分类器，输入为c_dim
+    unstable_classifier = Classifier(args, input_size=args.s_dim).to(device)  # 不稳定模型分类器，输入为s_dim
 
+    # 稳定分类器的优化器和学习率调度器
+    stable_optimizer = SGD(stable_classifier.parameters(),
+                           lr=args.lr, momentum=args.momentum, weight_decay=args.weight_decay, nesterov=True)
+    print(stable_optimizer.param_groups[0]['lr'], ' *** lr for stable classifier')
+    stable_lr_scheduler = LambdaLR(stable_optimizer,
+                                   lambda x: args.lr * (1. + args.lr_gamma * float(x)) ** (-args.lr_decay))
+    print(stable_optimizer.param_groups[0]['lr'], ' *** lr for stable classifier after scheduler')
 
-    # 微调的优化器和学习率调度器
-    fintune_optimizer = SGD(unstable_model.get_parameters(),
-                            lr=args.lr, momentum=args.momentum, weight_decay=args.weight_decay, nesterov=True)
-    print(fintune_optimizer.param_groups[0]['lr'], ' *** lr')
-    finetune_lr_scheduler = LambdaLR(fintune_optimizer, lambda x: args.lr * (1. + args.lr_gamma * float(x)) ** (-args.lr_decay))
-    print(fintune_optimizer.param_groups[0]['lr'], ' *** lr')
+    # 不稳定分类器的优化器和学习率调度器
+    unstable_optimizer = SGD(unstable_classifier.parameters(),
+                             lr=args.lr, momentum=args.momentum, weight_decay=args.weight_decay, nesterov=True)
+    print(unstable_optimizer.param_groups[0]['lr'], ' *** lr for unstable classifier')
+    unstable_lr_scheduler = LambdaLR(unstable_optimizer,
+                                     lambda x: args.lr * (1. + args.lr_gamma * float(x)) ** (-args.lr_decay))
+    print(unstable_optimizer.param_groups[0]['lr'], ' *** lr for unstable classifier after scheduler')
+
 
 
     test_logger = '%s/test.txt' % (args.log)
 
     if args.phase != 'train':
-        stable_model.load_state_dict(torch.load(logger.get_checkpoint_path('best_stable')))
-        unstable_model.load_state_dict(torch.load(logger.get_checkpoint_path('best_unstable')))
+        stable_classifier.load_state_dict(torch.load(logger.get_checkpoint_path('best_stable')))
+        unstable_classifier.load_state_dict(torch.load(logger.get_checkpoint_path('best_unstable')))
 
     if args.phase == 'test':
 
-        combined_acc = combined_inference(stable_model, unstable_model,
-                                          test_loader,num_classes)
+        combined_acc = combined_inference(VAE_model, stable_classifier, unstable_classifier, test_loader, num_classes)
+
         print("Final Combined Model Test Acc = {:3.2f}".format(combined_acc))
         return
 
+    # start training
     best_acc1 = 0.
     total_iter = 0
-    for epoch in range(args.stable_epochs):
-        # 训练稳定特征模型
-        train_stable(train_source_iter, train_target_iter, stable_model, stable_optimizer, stable_lr_scheduler, epoch, args, total_iter)
-
-        total_iter += args.iters_per_epoch
-
-        # 验证稳定模型
-        acc1 = utils.validate(val_loader, stable_model, args, device)
-        print(' * Stable Model Val Acc@1 %.3f' % (acc1))
-        wandb.log({"Stable Model Val Acc": acc1})
-
-        wandb.log({"Stable Model Test Acc": acc1})
-        message = '(epoch %d): Stable Model Test Acc@1 %.3f' % (epoch + 1, acc1)
+    for epoch in range(args.epochs):
+        print("lr:", lr_scheduler.get_last_lr(), vae_optimizer.param_groups[0]['lr'])
+        # train for one epoch
+        train_VAE(train_source_iter, val_iter, VAE_model, vae_optimizer,
+              lr_scheduler, epoch, args, total_iter, backbone)
+        # evaluate on validation set
+        acc1 = utils.validate(val_loader, VAE_model, args, device)
+        wandb.log({"VAE Val Acc": acc1})
+        message = '(epoch %d): VAE Val Acc %.3f' % (epoch+1, acc1)
         print(message)
         record = open(test_logger, 'a')
-        record.write(message + '\n')
+        record.write(message+'\n')
         record.close()
 
         # remember best acc@1 and save checkpoint
-        torch.save(stable_model.state_dict(), logger.get_checkpoint_path('latest_stable'))
-
+        torch.save(VAE_model.state_dict(), logger.get_checkpoint_path('latest'))
         if acc1 > best_acc1:
-            shutil.copy(logger.get_checkpoint_path('latest_stable'), logger.get_checkpoint_path('best_stable'))
+            shutil.copy(logger.get_checkpoint_path('latest'), logger.get_checkpoint_path('best'))
         best_acc1 = max(acc1, best_acc1)
-        wandb.run.summary["best_accuracy"] = best_acc1
+        wandb.run.summary["best_vae_accuracy"] = best_acc1
 
     print("best_acc1 = {:3.2f}".format(best_acc1))
-    # 加载最佳稳定模型并评估
-    stable_model.load_state_dict(torch.load(logger.get_checkpoint_path('best_stable')))
-    acc1 = utils.validate(test_loader, stable_model, args, device)
-    print("Final Best Stable Model test_acc1 = {:3.2f}".format(acc1))
+    # evaluate on test set
+    VAE_model.load_state_dict(torch.load(logger.get_checkpoint_path('best')))
+    acc1 = utils.validate(test_loader, VAE_model, args, device)
+    print("VAE Best test_acc1 = {:3.2f}".format(acc1))
+
+    for param in VAE_model.parameters():
+        param.requires_grad = False
 
     best_acc2 = 0.
     total_iter = 0
     for epoch in range(args.unstable_epochs):
 
         # 训练不稳定特征模型
-        train_unstable(train_source_iter, train_target_iter, unstable_model, unstable_optimizer, unstable_lr_scheduler, epoch, args, total_iter)
+        train_stable(train_source_iter, val_iter,VAE_model, stable_classifier, stable_optimizer, stable_lr_scheduler, epoch, args, total_iter)
 
-        total_iter += args.iters_per_epoch
 
-        # 验证不稳定模型
-        acc2 = utils.validate(val_loader, unstable_model, args, device)
-        print(' * Unstable Model Val Acc@1 %.3f' % (acc2))
-        wandb.log({"Unstable Model Val Acc": acc2})
+        # 调用 validate_classifier 函数进行验证
+        acc2, _ = utils.validate_classifier(VAE_model, stable_classifier, unstable_classifier, val_loader,
+                                                       args, device)
 
-        wandb.log({"Unstable Model Test Acc": acc2})
-        message = '(epoch %d): Unstable Model Test Acc@2 %.3f' % (epoch + 1, acc2)
+        wandb.log({"Stable Classifier Val Acc": acc2})
+
+        message = '(epoch %d): Stable Classifier Val Acc %.3f' % (epoch + 1, acc2)
         print(message)
         record = open(test_logger, 'a')
         record.write(message + '\n')
         record.close()
 
         # remember best acc@1 and save checkpoint
-        torch.save(unstable_model.state_dict(), logger.get_checkpoint_path('latest_unstable'))
+        torch.save(stable_classifier.state_dict(), logger.get_checkpoint_path('latest_stable'))
 
         if acc2 > best_acc2:
-            shutil.copy(logger.get_checkpoint_path('latest_unstable'), logger.get_checkpoint_path('best_unstable'))
+            shutil.copy(logger.get_checkpoint_path('latest_stable'), logger.get_checkpoint_path('best_stable'))
         best_acc2= max(acc2, best_acc2)
-        wandb.run.summary["best_accuracy"] = best_acc2
+
+        wandb.run.summary["best_stable_accuracy"] = best_acc2
 
     print("best_acc2 = {:3.2f}".format(best_acc2))
 
     # 加载最佳稳定模型并评估
-    unstable_model.load_state_dict(torch.load(logger.get_checkpoint_path('best_unstable')))
-    acc2 = utils.validate(test_loader, unstable_model, args, device)
-    print("Final Best Unstable Model test_acc2 = {:3.2f}".format(acc2))
+    stable_classifier.load_state_dict(torch.load(logger.get_checkpoint_path('best_stable')))
+    # 调用 validate_classifier 函数进行验证
+    acc2, _ = utils.validate_classifier(VAE_model, stable_classifier, unstable_classifier, test_loader,
+                                        args, device)
+    print("Final Best Stable Classifier test_acc2 = {:3.2f}".format(acc2))
 
-    best_acc3 = best_acc2
+    for param in stable_classifier.parameters():
+        param.requires_grad = False
+
+    best_acc3 = 0.
     total_iter = 0
-    for epoch in range(args.finetune_epochs):
+    for epoch in range(args.unstable_epochs):
 
         # 训练不稳定特征模型
-        finetune_unstable_with_pseudo_labels(stable_model, unstable_model, train_target_iter,
-         fintune_optimizer, finetune_lr_scheduler, epoch, args, total_iter)
+        train_unstable(train_source_iter, val_iter,VAE_model, stable_classifier,unstable_classifier, unstable_optimizer, unstable_lr_scheduler, epoch, args, total_iter)
 
-        total_iter += args.iters_per_epoch
 
-        # 验证不稳定模型
-        acc3 = utils.validate(val_loader, unstable_model, args, device)
-        print(' * Unstable Model Finetune Val  Acc@3 %.3f' % (acc3))
-        wandb.log({"Unstable Model Finetune Val Acc": acc3})
-        wandb.log({"Unstable Model Finetune Test Acc": acc3})
-        message = '(epoch %d): Unstable Model Finetune Test Acc@3 %.3f' % (epoch + 1, acc3)
+        # 调用 validate_classifier 函数进行验证
+        _, acc3 = utils.validate_classifier(VAE_model, stable_classifier, unstable_classifier, val_loader,
+                                                       args, device)
+
+        wandb.log({"Unstable Classifier Val Acc": acc3})
+
+        message = '(epoch %d): Unstable Classifier Val Acc %.3f' % (epoch + 1, acc3)
         print(message)
         record = open(test_logger, 'a')
         record.write(message + '\n')
         record.close()
 
         # remember best acc@1 and save checkpoint
-        torch.save(unstable_model.state_dict(), logger.get_checkpoint_path('latest_unstable'))
+        torch.save(unstable_classifier.state_dict(), logger.get_checkpoint_path('latest_unstable'))
 
         if acc3 > best_acc3:
             shutil.copy(logger.get_checkpoint_path('latest_unstable'), logger.get_checkpoint_path('best_unstable'))
         best_acc3= max(acc3, best_acc3)
+
         wandb.run.summary["best_accuracy"] = best_acc3
 
     print("best_acc3 = {:3.2f}".format(best_acc3))
-    # evaluate on test set
 
     # 加载最佳稳定模型并评估
-    unstable_model.load_state_dict(torch.load(logger.get_checkpoint_path('best_unstable')))
-    acc3 = utils.validate(test_loader, unstable_model, args, device)
-    print("Final Best Unstable Model After Fintune test_acc3 = {:3.2f}".format(acc3))
+    unstable_classifier.load_state_dict(torch.load(logger.get_checkpoint_path('best_unstable')))
+
+    # 调用 validate_classifier 函数进行验证
+    acc2,acc3 = utils.validate_classifier(VAE_model, stable_classifier, unstable_classifier, test_loader,
+                                        args, device)
+    print("Final Best Stable Classifier test_acc2 = {:3.2f}".format(acc2))
+    print("Final Best Unstable Classifier test_acc3 = {:3.2f}".format(acc3))
+
+    for param in unstable_classifier.parameters():
+        param.requires_grad = False
 
     # 评估组合模型
 
-    combined_acc= combined_inference(stable_model, unstable_model, test_loader, num_classes)
+    combined_acc= combined_inference(VAE_model,stable_classifier, unstable_classifier, test_loader, num_classes)
 
-    # 分别打印准确率和 OOD
+    # 分别打印准确率
     print("Final Combined Model Test Acc = {:3.2f}".format(combined_acc))
 
     logger.close()
@@ -288,7 +299,7 @@ if __name__ == '__main__':
                         dest='weight_decay')
     parser.add_argument('-j', '--workers', default=2, type=int, metavar='N',
                         help='number of data loading workers (default: 2)')
-    parser.add_argument('--epochs', default=40, type=int, metavar='N',
+    parser.add_argument('--epochs', default=2, type=int, metavar='N',
                         help='number of total epochs to run')
     parser.add_argument('-i', '--iters-per-epoch', default=1, type=int,
                         help='Number of iterations per epoch')

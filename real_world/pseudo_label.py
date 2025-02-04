@@ -6,39 +6,49 @@ import torch.nn.functional as F
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 
-def combined_inference(stable_model, unstable_model, test_loader,num_classes):
+def combined_inference(vae_model,stable_classifier, unstable_classifier, test_loader,num_classes):
     # 初始化先验分布和混淆矩阵
     PY = torch.zeros(num_classes).to(device)  # 类别先验分布
     e_matrix = torch.zeros(num_classes, num_classes).to(device)  # 混淆矩阵
 
     # 计算混淆矩阵和先验分布
-    stable_model.eval()
-    unstable_model.eval()
+    stable_classifier.eval()
+    unstable_classifier.eval()
     with torch.no_grad():
         for batch_idx, batch in enumerate(test_loader):
             # 解包数据，只取前两个（data 和 labels）
-            data, labels = batch[:2]
+            data, labels,domains = batch[:3]
             data = data.to(device)
             labels = labels.to(device)
-            if labels.dim() == 1:
-                labels = F.one_hot(labels, num_classes=num_classes).float()
+            domains=domains.to(device)
 
-            # compute output
-            u = torch.ones([len(data)]).long().to(device)
+            # VAE model inference to decouple content and style
+            z_content, _ = extract_features(vae_model,data,domains,True)
 
-            # 稳定模型预测（使用 sigmoid）
-            Y_pred_stable = torch.sigmoid(stable_model(data,u))
-            Y_pred_stable_hard = (Y_pred_stable > 0.5).float()
+            # Stable model prediction using content (z_content)
+            stable_pred = stable_classifier(z_content)
+
+            stable_pred_softmax = F.softmax(stable_pred, dim=1)  # Softmax for multi-class classification
+            stable_pred_hard = torch.argmax(stable_pred_softmax, dim=1)
+
 
             # 更新先验分布
             PY += labels.sum(dim=0)
 
-            e_matrix += torch.matmul(labels.T, Y_pred_stable_hard)
+            # 计算混淆矩阵
+            for i in range(len(labels)):  # 对每一个样本
+                true_label = labels[i].item()  # 真实标签
+                predicted_label = stable_pred_hard[i].item()  # 预测标签
+                e_matrix[true_label, predicted_label] += 1
+
 
 
 
     # 归一化混淆矩阵和先验分布
     e_matrix = e_matrix / e_matrix.sum(dim=0, keepdim=True)
+    # 打印混淆矩阵
+    print(f"Iteration {batch_idx + 1}, Confusion Matrix:\n{e_matrix}")
+
     PY = PY / PY.sum()
 
     # 第二遍：使用调整后的不稳定模型预测
@@ -48,42 +58,41 @@ def combined_inference(stable_model, unstable_model, test_loader,num_classes):
     with torch.no_grad():
         for batch_idx, batch in enumerate(test_loader):
             # 解包数据，只取前两个（data 和 labels）
-            data, labels = batch[:2]
+            data, labels,domains = batch[:3]
             data = data.to(device)
             labels = labels.to(device)
-            # 转换为 one-hot 编码
-            if labels.dim() == 1:
-                labels = F.one_hot(labels, num_classes=num_classes).float()
+            domains=domains.to(device)
 
-            u = torch.ones([len(data)]).long().to(device)
+            # VAE model inference to decouple content and style
+            z_content, z_style = extract_features(vae_model,data,domains,True)
 
-            # 稳定模型预测（sigmoid 输出概率）
-            Y_stable = torch.sigmoid(stable_model(data,u))
-            Xlogit = torch.logit(Y_stable, eps=1e-6)
-            Y_stable_hard = torch.argmax(Y_stable, dim=1)
-            # print(Y_stable_hard)
+            # Stable model prediction using content (z_content)
+            stable_pred = stable_classifier(z_content)
+            stable_pred_softmax = F.softmax(stable_pred, dim=1)
+            stable_pred_hard = torch.argmax(stable_pred_softmax, dim=1)
 
+            # Unstable model prediction using style (z_style)
+            unstable_pred = unstable_classifier(z_style)
+            unstable_pred_softmax = F.softmax(unstable_pred, dim=1)
 
-            # 不稳定模型预测并调整（sigmoid 输出 + 偏差校正）
-            Y_unstable = torch.sigmoid(unstable_model(data,u))
+            # Apply least squares correction to the unstable model's output
+            unstable_pred_corrected = least_squares_correction(unstable_pred_softmax, e_matrix)
 
-            Y_unstable_corrected = least_squares_correction(Y_unstable, e_matrix)
-            # Y_unstable_corrected = torch.matmul(Y_unstable, torch.inverse(e_matrix))
-            # print(torch.argmax(Y_unstable, dim=1))
-            # Y_unstable_corrected = torch.clamp(Y_unstable_corrected, min=0, max=1)
-            Ulogit = torch.logit(Y_unstable_corrected, eps=1e-6)
+            # Logits for combining stable and unstable model predictions
+            stable_logit = torch.log(stable_pred_softmax + 1e-6)
+            unstable_logit = torch.log(unstable_pred_corrected + 1e-6)
 
-            # 联合预测：组合稳定模型和不稳定模型的对数几率
-            combined_logit = Xlogit + Ulogit - torch.log(PY + 1e-6)
+            # Combined logits
+            combined_logit = stable_logit + unstable_logit - torch.log(PY + 1e-6)
 
-            # 转换为概率分布
-            predict = torch.sigmoid(combined_logit)
+            # Convert combined logits to probabilities
+            predict = F.softmax(combined_logit, dim=1)
 
 
             # 转换为硬标签（单标签分类选择最大概率）
             predicted = torch.argmax(predict, dim=1)
 
-            correct += (predicted == torch.argmax(labels, dim=1)).sum().item()
+            correct += (predicted == labels).sum().item()
             total += labels.size(0)
 
     # 输出准确率
@@ -97,7 +106,7 @@ def least_squares_correction(Y_unstable, e_matrix):
     p = torch.ones_like(Y_unstable) / Y_unstable.size(1)  # 初始概率分布
 
     # 迭代优化
-    for i in range(10):  # 优化10次迭代
+    for i in range(10):
         gradient = torch.matmul(e_matrix, p.T) - Y_unstable.T
         p = p - 0.01 * gradient.T  # 学习率 0.01
         p = F.softmax(p, dim=1)  # 确保 p 满足概率分布约束
