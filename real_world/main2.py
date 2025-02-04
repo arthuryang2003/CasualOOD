@@ -125,7 +125,7 @@ def main(args: argparse.Namespace):
     # start training
     best_acc1 = 0.
     total_iter = 0
-    for epoch in range(args.epochs):
+    for epoch in range(args.vae_epochs):
         print("lr:", lr_scheduler.get_last_lr(), vae_optimizer.param_groups[0]['lr'])
         # train for one epoch
         train_VAE(train_source_iter, val_iter, VAE_model, vae_optimizer,
@@ -191,7 +191,7 @@ def main(args: argparse.Namespace):
     # 调用 validate_classifier 函数进行验证
     acc2, _ = utils.validate_classifier(VAE_model, stable_classifier, unstable_classifier, test_loader,
                                         args, device)
-    print("Final Best Stable Classifier test_acc2 = {:3.2f}".format(acc2))
+    print("Best Stable Classifier test_acc2 = {:3.2f}".format(acc2))
 
     for param in stable_classifier.parameters():
         param.requires_grad = False
@@ -307,8 +307,6 @@ if __name__ == '__main__':
                         metavar='N', help='print frequency (default: 100)')
     parser.add_argument('-e', '--eval-freq', default=100, type=int,
                         metavar='N', help='print frequency (default: 100)')
-    parser.add_argument('--finetune_epochs', default=1, type=int, metavar='N',
-                        help='number of finetune epochs to run')
 
     # 随机种子和评估选项
     parser.add_argument('--seed', default=5, type=int,
@@ -346,6 +344,8 @@ if __name__ == '__main__':
                         help='number of stable epochs to run')
     parser.add_argument('--unstable_epochs', type=int, default=1, metavar='N',
                         help='number of unstable epochs to run')
+    parser.add_argument('--vae_epochs', type=int, default=1, metavar='N',
+                        help='number of vae epochs to run')
     parser.add_argument('--target_split_ratio', type=float, default=0.8, metavar='N',
                         help='ratio of target domain data used for training set (rest for testing)')
 

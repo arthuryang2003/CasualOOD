@@ -9,12 +9,11 @@ WANDB_MODE=disabled CUDA_VISIBLE_DEVICES=${device[0]} python main2.py --root=../
 --name=PACS_test_To_C \
 --z_dim=64 --s_dim=${s_dim[0]} \
 --C_max=15 --beta=1 --lambda_vae=${lambda_vae[0]} --lambda_ent=0.1 \
--i=1000 \
+-i=2500 \
 --seed=${seed[i]} \
---finetune_epochs=10 \
+--vae_epochs=40 \
 --train_batch_size=16 \
 --target_split_ratio=0.8 \
 --unstable_epochs=20 \
---stable_epochs=20 \
---phase=test
+--stable_epochs=20
 done

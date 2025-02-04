@@ -11,7 +11,7 @@ WANDB_MODE=disabled CUDA_VISIBLE_DEVICES=${device[0]} python main2.py --root=../
 --C_max=15 --beta=1 --lambda_vae=${lambda_vae[0]} --lambda_ent=0.1 \
 -i=100 \
 --seed=${seed[i]} \
---finetune_epochs=2 \
+--vae_epochs=2 \
 --train_batch_size=16 \
 --target_split_ratio=0.8 \
 --unstable_epochs=1 \
