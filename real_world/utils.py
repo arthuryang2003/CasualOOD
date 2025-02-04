@@ -189,9 +189,9 @@ def validate_classifier(vae_model, stable_classifier, unstable_classifier, val_l
             batch_time.update(time.time() - end)
             end = time.time()
 
-            if i % args.print_freq == 0:
-                progress.display(i)
-
+            # if i % args.print_freq == 0:
+            #     progress.display(i)
+    progress.display(i)
     return top1_stable.avg, top1_unstable.avg
 
 
@@ -235,12 +235,14 @@ def validate(val_loader, model, args, device) -> float:
             batch_time.update(time.time() - end)
             end = time.time()
 
-            if i % args.print_freq == 0:
-                progress.display(i)
+            # if i % args.print_freq == 0:
+            #     progress.display(i)
 
         if confmat:
             print(confmat.format(args.class_names))
 
+
+    progress.display(i)
     return top1.avg
 
 

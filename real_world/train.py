@@ -305,10 +305,6 @@ def train_unstable(train_source_iter: ForeverDataIterator,
         prefix="Unstable Classifier Epoch: [{}]".format(epoch)
     )
 
-
-    for param in stable_classifier.parameters():
-        param.requires_grad = False
-
     stable_classifier.eval()
 
     # 切换到训练模式

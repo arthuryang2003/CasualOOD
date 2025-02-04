@@ -117,8 +117,8 @@ def main(args: argparse.Namespace):
 
     if args.phase == 'test':
 
-        combined_acc = combined_inference(stable_classifier, unstable_classifier,
-                                          test_loader,num_classes)
+        combined_acc = combined_inference(VAE_model, stable_classifier, unstable_classifier, test_loader, num_classes)
+
         print("Final Combined Model Test Acc = {:3.2f}".format(combined_acc))
         return
 
@@ -144,7 +144,7 @@ def main(args: argparse.Namespace):
         if acc1 > best_acc1:
             shutil.copy(logger.get_checkpoint_path('latest'), logger.get_checkpoint_path('best'))
         best_acc1 = max(acc1, best_acc1)
-        wandb.run.summary["best_accuracy"] = best_acc1
+        wandb.run.summary["best_vae_accuracy"] = best_acc1
 
     print("best_acc1 = {:3.2f}".format(best_acc1))
     # evaluate on test set
@@ -176,29 +176,74 @@ def main(args: argparse.Namespace):
         record.close()
 
         # remember best acc@1 and save checkpoint
-        torch.save(stable_classifier.state_dict(), logger.get_checkpoint_path('latest_unstable'))
+        torch.save(stable_classifier.state_dict(), logger.get_checkpoint_path('latest_stable'))
 
         if acc2 > best_acc2:
-            shutil.copy(logger.get_checkpoint_path('latest_unstable'), logger.get_checkpoint_path('best_unstable'))
+            shutil.copy(logger.get_checkpoint_path('latest_stable'), logger.get_checkpoint_path('best_stable'))
         best_acc2= max(acc2, best_acc2)
 
-        wandb.run.summary["best_accuracy"] = best_acc2
+        wandb.run.summary["best_stable_accuracy"] = best_acc2
 
     print("best_acc2 = {:3.2f}".format(best_acc2))
 
     # 加载最佳稳定模型并评估
-    stable_classifier.load_state_dict(torch.load(logger.get_checkpoint_path('best_unstable')))
+    stable_classifier.load_state_dict(torch.load(logger.get_checkpoint_path('best_stable')))
     # 调用 validate_classifier 函数进行验证
     acc2, _ = utils.validate_classifier(VAE_model, stable_classifier, unstable_classifier, test_loader,
                                         args, device)
     print("Final Best Stable Classifier test_acc2 = {:3.2f}".format(acc2))
 
+    for param in stable_classifier.parameters():
+        param.requires_grad = False
+
+    best_acc3 = 0.
+    total_iter = 0
+    for epoch in range(args.unstable_epochs):
+
+        # 训练不稳定特征模型
+        train_unstable(train_source_iter, val_iter,VAE_model, stable_classifier,unstable_classifier, unstable_optimizer, unstable_lr_scheduler, epoch, args, total_iter)
+
+
+        # 调用 validate_classifier 函数进行验证
+        _, acc3 = utils.validate_classifier(VAE_model, stable_classifier, unstable_classifier, val_loader,
+                                                       args, device)
+
+        wandb.log({"Unstable Classifier Val Acc": acc3})
+
+        message = '(epoch %d): Unstable Classifier Val Acc %.3f' % (epoch + 1, acc3)
+        print(message)
+        record = open(test_logger, 'a')
+        record.write(message + '\n')
+        record.close()
+
+        # remember best acc@1 and save checkpoint
+        torch.save(unstable_classifier.state_dict(), logger.get_checkpoint_path('latest_unstable'))
+
+        if acc3 > best_acc3:
+            shutil.copy(logger.get_checkpoint_path('latest_unstable'), logger.get_checkpoint_path('best_unstable'))
+        best_acc3= max(acc3, best_acc3)
+
+        wandb.run.summary["best_accuracy"] = best_acc3
+
+    print("best_acc3 = {:3.2f}".format(best_acc3))
+
+    # 加载最佳稳定模型并评估
+    unstable_classifier.load_state_dict(torch.load(logger.get_checkpoint_path('best_unstable')))
+
+    # 调用 validate_classifier 函数进行验证
+    acc2,acc3 = utils.validate_classifier(VAE_model, stable_classifier, unstable_classifier, test_loader,
+                                        args, device)
+    print("Final Best Stable Classifier test_acc2 = {:3.2f}".format(acc2))
+    print("Final Best Unstable Classifier test_acc3 = {:3.2f}".format(acc3))
+
+    for param in unstable_classifier.parameters():
+        param.requires_grad = False
 
     # 评估组合模型
 
-    combined_acc= combined_inference(stable_model, unstable_model, test_loader, num_classes)
+    combined_acc= combined_inference(VAE_model,stable_classifier, unstable_classifier, test_loader, num_classes)
 
-    # 分别打印准确率和 OOD
+    # 分别打印准确率
     print("Final Combined Model Test Acc = {:3.2f}".format(combined_acc))
 
     logger.close()
