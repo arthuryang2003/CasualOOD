@@ -123,15 +123,18 @@ def main(args: argparse.Namespace):
         return
 
     # start training
-    best_acc1 = 0.
     total_iter = 0
+    min_loss=10000.0
     for epoch in range(args.vae_epochs):
         print("lr:", lr_scheduler.get_last_lr(), vae_optimizer.param_groups[0]['lr'])
         # train for one epoch
         train_VAE(train_source_iter, val_iter, VAE_model, vae_optimizer,
               lr_scheduler, epoch, args, total_iter, backbone)
+
         # evaluate on validation set
-        acc1 = utils.validate(val_loader, VAE_model, args, device)
+        acc1,loss1 = utils.validate(val_loader, VAE_model, args,total_iter, device)
+        print("loss1 = {:3.4f}".format(loss1))
+        wandb.log({"VAE Val loss": loss1})
         wandb.log({"VAE Val Acc": acc1})
         message = '(epoch %d): VAE Val Acc %.3f' % (epoch+1, acc1)
         print(message)
@@ -140,17 +143,18 @@ def main(args: argparse.Namespace):
         record.close()
 
         # remember best acc@1 and save checkpoint
-        torch.save(VAE_model.state_dict(), logger.get_checkpoint_path('latest'))
-        if acc1 > best_acc1:
-            shutil.copy(logger.get_checkpoint_path('latest'), logger.get_checkpoint_path('best'))
-        best_acc1 = max(acc1, best_acc1)
-        wandb.run.summary["best_vae_accuracy"] = best_acc1
+        torch.save(VAE_model.state_dict(), logger.get_checkpoint_path('latest_vae'))
+        if min_loss > loss1:
+            shutil.copy(logger.get_checkpoint_path('latest_vae'), logger.get_checkpoint_path('best_vae'))
 
-    print("best_acc1 = {:3.2f}".format(best_acc1))
+        min_loss = min(loss1, min_loss)
+
+    print("min_loss = {:3.4f}".format(min_loss))
     # evaluate on test set
-    VAE_model.load_state_dict(torch.load(logger.get_checkpoint_path('best')))
-    acc1 = utils.validate(test_loader, VAE_model, args, device)
+    VAE_model.load_state_dict(torch.load(logger.get_checkpoint_path('best_vae')))
+    acc1,loss1 = utils.validate(test_loader, VAE_model, args, total_iter,device)
     print("VAE Best test_acc1 = {:3.2f}".format(acc1))
+    print("VAE Best test_loss1 = {:3.4f}".format(loss1))
 
     for param in VAE_model.parameters():
         param.requires_grad = False

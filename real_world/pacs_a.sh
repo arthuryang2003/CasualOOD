@@ -1,4 +1,4 @@
-declare -a seed=(4)
+declare -a seed=(8)
 declare -a s_dim=(4)
 declare -a lambda_vae=(5e-5)
 declare -a device=(0)

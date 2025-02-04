@@ -21,7 +21,6 @@ from common.utils.meter import AverageMeter, ProgressMeter
 from torchvision.utils import save_image
 from extract_features import extract_features
 
-
 def get_model_names():
     return sorted(
         name for name in models.__dict__
@@ -195,14 +194,22 @@ def validate_classifier(vae_model, stable_classifier, unstable_classifier, val_l
     return top1_stable.avg, top1_unstable.avg
 
 
-def validate(val_loader, model, args, device) -> float:
+def validate(val_loader, model, args, total_iter,device) -> float:
     batch_time = AverageMeter('Time', ':6.3f')
-    losses = AverageMeter('Loss', ':.4e')
+    losses_vae = AverageMeter('VAE', ':4.4f')
+    losses_cls = AverageMeter('Cls', ':4.4f')
+    losses_kl = AverageMeter('KL', ':4.4f')
+    losses_recon = AverageMeter('Rec', ':4.4f')
+    total_loss = AverageMeter('Loss', ':4.4f')
+
     top1 = AverageMeter('Acc@1', ':6.2f')
     progress = ProgressMeter(
         len(val_loader),
-        [batch_time, losses, top1],
+        [batch_time,losses_vae, losses_cls, losses_kl, losses_recon, total_loss, top1],
         prefix='Test: ')
+
+    normal_distribution = torch.distributions.MultivariateNormal(torch.zeros(args.z_dim).cuda(),
+                                                                 torch.eye(args.z_dim).cuda())
 
     # switch to evaluate mode
     model.eval()
@@ -221,17 +228,51 @@ def validate(val_loader, model, args, device) -> float:
             target = target.to(device)
             u =u.to(device)
 
-            output = model(images, u=u)
-            loss = F.cross_entropy(output, target)
+            # Feature extraction
+            x = model.backbone(images)
+            z, tilde_z, mu, log_var, logdet_u, logit = model.encode(x, u=u)
 
-            # measure accuracy and record loss
-            acc1, = accuracy(output, target, topk=(1,))
-            if confmat:
-                confmat.update(target, output.argmax(1))
-            losses.update(loss.item(), images.size(0))
+            # Classification loss
+            cls_loss = F.cross_entropy(logit, target)
+
+            # VAE KL loss
+            q_dist = torch.distributions.Normal(mu, torch.exp(torch.clamp(log_var, min=-10) / 2))
+            log_qz = q_dist.log_prob(z)
+            log_pz = normal_distribution.log_prob(tilde_z) + logdet_u
+            kl = (log_qz.sum(dim=1) - log_pz).mean()
+
+            # Smooth C value to adjust KL loss during training
+            C = torch.clamp(torch.tensor(args.C_max) / args.C_stop_iter * total_iter, 0, args.C_max)
+            loss_kl = args.beta * (kl - C).abs()  # KL loss
+
+            # Reconstruction loss
+            x_hat = model.decode(z)
+            recon_loss = F.mse_loss(x, x_hat, reduction='sum') / len(x)
+
+            # VAE loss (KL loss + reconstruction loss)
+            mean_loss_vae = recon_loss + loss_kl
+
+
+
+            # Total loss (Classification loss + VAE loss)
+            total_val_loss = cls_loss + args.lambda_vae * mean_loss_vae
+
+            # Update meters
+            losses_vae.update(mean_loss_vae.item(), images.size(0))
+            losses_cls.update(cls_loss.item(), images.size(0))
+            losses_kl.update(kl.item(), images.size(0))
+            losses_recon.update(recon_loss.item(), images.size(0))
+            total_loss.update(total_val_loss.item(), images.size(0))
+
+            # Measure accuracy
+            acc1 = accuracy(logit, target)[0]
             top1.update(acc1.item(), images.size(0))
 
-            # measure elapsed time
+            # Confusion matrix update
+            if confmat:
+                confmat.update(target, logit.argmax(1))
+
+            # Measure elapsed time
             batch_time.update(time.time() - end)
             end = time.time()
 
@@ -243,7 +284,7 @@ def validate(val_loader, model, args, device) -> float:
 
 
     progress.display(i)
-    return top1.avg
+    return top1.avg, total_loss.avg
 
 
 def get_train_transform(resizing='default', random_horizontal_flip=True, random_color_jitter=False,
