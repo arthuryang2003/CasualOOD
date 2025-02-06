@@ -170,13 +170,17 @@ def validate_classifier(vae_model, stable_classifier, unstable_classifier, val_l
             stable_output = stable_classifier(content)
             stable_loss = F.cross_entropy(stable_output, target)
 
+            # 生成伪标签
+            pseudo_labels = torch.argmax(stable_output, dim=1)
+            pseudo_labels = pseudo_labels.to(device)
+
             # 使用不稳定分类器进行预测
             unstable_output = unstable_classifier(style)
-            unstable_loss = F.cross_entropy(unstable_output, target)
+            unstable_loss = F.cross_entropy(unstable_output, pseudo_labels)
 
             # 计算准确率
             stable_acc, = accuracy(stable_output, target, topk=(1,))
-            unstable_acc, = accuracy(unstable_output, target, topk=(1,))
+            unstable_acc, = accuracy(unstable_output, pseudo_labels, topk=(1,))
 
             # 更新统计
             stable_losses.update(stable_loss.item(), images.size(0))

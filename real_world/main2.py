@@ -114,8 +114,17 @@ def main(args: argparse.Namespace):
     if args.phase != 'train':
         stable_classifier.load_state_dict(torch.load(logger.get_checkpoint_path('best_stable')))
         unstable_classifier.load_state_dict(torch.load(logger.get_checkpoint_path('best_unstable')))
+        VAE_model.load_state_dict(torch.load(logger.get_checkpoint_path('best_vae')))
 
     if args.phase == 'test':
+        acc1, _ = utils.validate(test_loader, VAE_model, args, 0, device)
+        print("VAE Best test_acc1 = {:3.2f}".format(acc1))
+
+        # 调用 validate_classifier 函数进行验证
+        acc2, acc3 = utils.validate_classifier(VAE_model, stable_classifier, unstable_classifier, test_loader,
+                                               args, device)
+        print("Final Best Stable Classifier test_acc2 = {:3.2f}".format(acc2))
+        print("Final Best Unstable Classifier test_acc3 = {:3.2f}".format(acc3))
 
         combined_acc = combined_inference(VAE_model, stable_classifier, unstable_classifier, test_loader, num_classes)
 
