@@ -428,9 +428,9 @@ def train_unstable(train_source_iter: ForeverDataIterator,
             progress.display(i)
 
             wandb.log({
-                "Unstable Model Train Loss": mean_loss_cls.item(),
-                "Unstable Model Train Accuracy": cls_acc.item(),
-                "Unstable Model Val  Accuracy": cls_t_acc.item(),
+                "Unstable Classifier Train Loss": mean_loss_cls.item(),
+                "Unstable Classifier Train Accuracy": cls_acc.item(),
+                "Unstable Classifier Val  Accuracy": cls_t_acc.item(),
 
             })
 
