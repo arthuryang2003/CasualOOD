@@ -66,6 +66,19 @@ def get_dataset_names():
         if not name.startswith("__") and callable(datasets.__dict__[name])
     ) + wilds.supported_datasets + ['Digits']
 
+class SplitDataset(torch.utils.data.Dataset):
+    def __init__(self, original_dataset, split_indices, domain_id):
+        self.original_dataset = original_dataset
+        self.split_indices = split_indices
+        self.domain_id = domain_id
+
+    def __len__(self):
+        return len(self.split_indices)
+
+    def __getitem__(self, idx):
+        # Get the index from the split indices and fetch the corresponding sample
+        real_idx = self.split_indices[idx]
+        return self.original_dataset[real_idx]
 
 class UniformDataset(torch.utils.data.Dataset):
     def __init__(self, datasets=[]):
@@ -104,11 +117,12 @@ def get_dataset(dataset_name, root, source, target, train_source_transform, val_
         num_classes = len(class_names)
 
     elif dataset_name in datasets.__dict__:
-        # load datasets from common.vision.datasets
+        # Check if the dataset is PACS or another dataset
         dataset = datasets.__dict__[dataset_name]
-        all_domains = source+target
+        all_domains = source + target
         assert target[0] not in source
 
+        # Define the concat_dataset function
         def concat_dataset(tasks, **kwargs):
             domain_ids = []
             dataset_list = []
@@ -116,18 +130,81 @@ def get_dataset(dataset_name, root, source, target, train_source_transform, val_
                 dt = dataset(task=task, domain_index=all_domains.index(task), **kwargs)
                 domain_ids += [all_domains.index(task)] * len(dt)
                 dataset_list.append(dt)
-            #x = ConcatDataset(dataset_list)
+            # x = ConcatDataset(dataset_list)
             x = UniformDataset(dataset_list)
             x.domain_ids = domain_ids
             return x
 
-        train_source_dataset = concat_dataset(root=root, tasks=source, download=True, split='train',phase='train', transform=train_source_transform)
-        train_target_dataset = concat_dataset(root=root, tasks=target, download=True, split='train',phase='train', transform=train_target_transform)
-        val_dataset = concat_dataset(root=root, tasks=source, download=True, split='test',phase='val', transform=val_transform)
-        test_dataset = concat_dataset(root=root, tasks=target, split='all', phase='test',download=True, transform=val_transform)
+        def concat_and_split_dataset(tasks, split_ratio=0.8, **kwargs):
 
-        class_names = train_source_dataset.datasets[0].classes
+            # Initialize domain_ids and dataset lists for both train and val
+            train_domain_ids = []
+            val_domain_ids = []
+            train_dataset_list = []
+            val_dataset_list = []
+
+            # Loop over each task and split the dataset
+            for task in tasks:
+                # Load dataset for the task
+                ds = dataset(task=task, domain_index=all_domains.index(task), **kwargs)
+
+                # Access the samples from the dataset directly (dt.samples contains the actual data)
+                samples = ds.samples
+
+                # Calculate the split index based on the split_ratio
+                total_samples = len(samples)
+                split_index = int(total_samples * split_ratio)
+
+                # Split the dataset into train and val by iterating over each item
+                train_indices = list(range(split_index))  # First part for training
+                val_indices = list(range(split_index, total_samples))  # Remaining part for validation
+
+                dt = SplitDataset(ds, train_indices, all_domains.index(task))
+                dv=SplitDataset(ds, val_indices, all_domains.index(task))
+
+                train_domain_ids += [all_domains.index(task)] * len(dt)
+                val_domain_ids += [all_domains.index(task)] * len(dv)
+
+                # Create new SplitDataset instances for train and val sets
+                train_dataset_list.append(dt)
+                val_dataset_list.append(dv)
+
+            # Create new datasets for train and validation sets
+            train_dataset = UniformDataset(train_dataset_list)
+            val_dataset = UniformDataset(val_dataset_list)
+
+            # Assign domain_ids to both train and val datasets
+            train_dataset.domain_ids = train_domain_ids
+            val_dataset.domain_ids = val_domain_ids
+
+            return train_dataset, val_dataset
+
+        if dataset_name == 'PACS':
+            # PACS dataset loading
+            # train_source_dataset = concat_dataset(root=root, tasks=source, download=True, split='train', phase='train',
+            #                                       transform=train_source_transform)
+            # val_dataset = concat_dataset(root=root, tasks=source, download=True, split='test', phase='val',
+            #                              transform=val_transform)
+
+            train_source_dataset = concat_and_split_dataset(tasks=source, split_ratio=0.8, root=root,
+                                                            download=True, phase='train',
+                                                            transform=train_source_transform)[0]
+            val_dataset = concat_and_split_dataset(tasks=source, split_ratio=0.8, root=root,
+                                                   download=True, phase='val', transform=val_transform)[1]
+        else:
+            train_source_dataset = concat_and_split_dataset(tasks=source, split_ratio=0.8, root=root,
+                                                            download=True, phase='train',
+                                                            transform=train_source_transform)[0]
+            val_dataset = concat_and_split_dataset(tasks=source, split_ratio=0.8, root=root,
+                                                   download=True, phase='val', transform=val_transform)[1]
+
+
+        test_dataset = concat_dataset(root=root, tasks=target, download=True, phase='test', transform=val_transform)
+        # Extract class names and number of classes
+        class_names = test_dataset.datasets[0].classes
         num_classes = len(class_names)
+
+
     else:
         # load datasets from wilds
         dataset = wilds.get_dataset(dataset_name, root_dir=root, download=True)
