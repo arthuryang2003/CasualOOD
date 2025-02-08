@@ -13,7 +13,6 @@ WANDB_MODE=disabled CUDA_VISIBLE_DEVICES=${device[0]} python main2.py --root=../
 --seed=${seed[i]} \
 --vae_epochs=2 \
 --train_batch_size=16 \
---target_split_ratio=0.8 \
 --unstable_epochs=1 \
 --stable_epochs=1 \
 --phase=train
