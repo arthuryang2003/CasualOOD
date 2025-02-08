@@ -181,16 +181,16 @@ def get_dataset(dataset_name, root, source, target, train_source_transform, val_
 
         if dataset_name == 'PACS':
             # PACS dataset loading
-            # train_source_dataset = concat_dataset(root=root, tasks=source, download=True, split='train', phase='train',
-            #                                       transform=train_source_transform)
-            # val_dataset = concat_dataset(root=root, tasks=source, download=True, split='test', phase='val',
-            #                              transform=val_transform)
+            train_source_dataset = concat_dataset(root=root, tasks=source, download=True, split='train', phase='train',
+                                                  transform=train_source_transform)
+            val_dataset = concat_dataset(root=root, tasks=source, download=True, split='test', phase='val',
+                                         transform=val_transform)
 
-            train_source_dataset = concat_and_split_dataset(tasks=source, split_ratio=0.8, root=root,
-                                                            download=True, phase='train',
-                                                            transform=train_source_transform)[0]
-            val_dataset = concat_and_split_dataset(tasks=source, split_ratio=0.8, root=root,
-                                                   download=True, phase='val', transform=val_transform)[1]
+            # train_source_dataset = concat_and_split_dataset(tasks=source, split_ratio=0.8, root=root,
+            #                                                 download=True, phase='train',
+            #                                                 transform=train_source_transform)[0]
+            # val_dataset = concat_and_split_dataset(tasks=source, split_ratio=0.8, root=root,
+            #                                        download=True, phase='val', transform=val_transform)[1]
         else:
             train_source_dataset = concat_and_split_dataset(tasks=source, split_ratio=0.8, root=root,
                                                             download=True, phase='train',
