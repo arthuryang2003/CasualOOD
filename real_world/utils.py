@@ -275,7 +275,7 @@ def validate_classifier(vae_model, stable_classifier, unstable_classifier, val_l
     return top1_stable.avg, top1_unstable.avg
 
 
-def validate(val_loader, model, args, total_iter,device) -> float:
+def validate_vae(val_loader, model, args, total_iter,device) -> float:
     batch_time = AverageMeter('Time', ':6.3f')
     losses_vae = AverageMeter('VAE', ':4.4f')
     losses_cls = AverageMeter('Cls', ':4.4f')
@@ -451,6 +451,51 @@ def str2bool(v):
     else:
         raise argparse.ArgumentTypeError('Boolean value expected.')
 
+def validate_decoupler(val_loader, model, args, device) -> float:
+    batch_time = AverageMeter('Time', ':6.3f')
+    losses = AverageMeter('Loss', ':.4e')
+    top1 = AverageMeter('Acc@1', ':6.2f')
+    progress = ProgressMeter(
+        len(val_loader),
+        [batch_time, losses, top1],
+        prefix='Test: ')
+
+    # switch to evaluate mode
+    model.eval()
+    if args.per_class_eval:
+        confmat = ConfusionMatrix(len(args.class_names))
+    else:
+        confmat = None
+
+    with torch.no_grad():
+        end = time.time()
+        for i, data in enumerate(val_loader):
+            images = data[0]
+            target = data[1]
+            images = images.to(device)
+            target = target.to(device)
+
+            output = model(images)
+            loss = F.cross_entropy(output, target)
+
+            # measure accuracy and record loss
+            acc1, = accuracy(output, target, topk=(1,))
+            if confmat:
+                confmat.update(target, output.argmax(1))
+            losses.update(loss.item(), images.size(0))
+            top1.update(acc1.item(), images.size(0))
+
+            # measure elapsed time
+            batch_time.update(time.time() - end)
+            end = time.time()
+
+            if i % args.print_freq == 0:
+                progress.display(i)
+
+        if confmat:
+            print(confmat.format(args.class_names))
+
+    return top1.avg
 
 
 # def combined_inference(stable_model, unstable_model, test_loader,num_classes):

@@ -6,7 +6,7 @@ import torch.nn.functional as F
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 
-def combined_inference(vae_model,stable_classifier, unstable_classifier, test_loader,num_classes):
+def combined_inference(decoupler_model,stable_classifier, unstable_classifier, test_loader,num_classes):
     # 初始化先验分布和混淆矩阵
     PY = torch.zeros(num_classes).to(device)  # 类别先验分布
     e_matrix = torch.zeros(num_classes, num_classes).to(device)  # 混淆矩阵
@@ -22,8 +22,8 @@ def combined_inference(vae_model,stable_classifier, unstable_classifier, test_lo
             labels = labels.to(device)
             domains=domains.to(device)
 
-            # VAE model inference to decouple content and style
-            z_content, _ = extract_features(vae_model,data,domains,True)
+            # decoupler model inference to decouple content and style
+            z_content,_=decoupler_model(data)
 
             # Stable model prediction using content (z_content)
             stable_pred = stable_classifier(z_content)
@@ -63,8 +63,8 @@ def combined_inference(vae_model,stable_classifier, unstable_classifier, test_lo
             labels = labels.to(device)
             domains=domains.to(device)
 
-            # VAE model inference to decouple content and style
-            z_content, z_style = extract_features(vae_model,data,domains,True)
+            # decoupler model inference to decouple content and style
+            z_content, z_style = decoupler_model(data)
 
             # Stable model prediction using content (z_content)
             stable_pred = stable_classifier(z_content)

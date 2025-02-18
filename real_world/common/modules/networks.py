@@ -33,6 +33,90 @@ class Classifier(nn.Module):
 
 
 
+class Decoupler(nn.Module):
+    def __init__(self, args, backbone_net=None):
+        super(Decoupler, self).__init__()
+
+        self.args = args
+        self.backbone_net = backbone_net
+
+        # latent space dimensions
+        self.z_dim = args.z_dim  # 总潜在空间的维度
+        self.s_dim = args.s_dim  # 虚假特征的维度
+        self.c_dim = self.z_dim - self.s_dim  # 不变特征的维度
+
+        dim = args.hidden_dim
+
+        # Define the backbone (feature extractor)
+        self.backbone = backbone_net
+
+        # Define the encoder to map features to latent space
+        self.encoder = nn.Sequential(
+            nn.Linear(self.backbone_net.out_features, dim),  # 假设backbone的输出是out_features维度
+            nn.ReLU(),
+            nn.Linear(dim, self.z_dim)  # 潜在空间的维度是z_dim
+        )
+
+
+        # Projection layers for decoupling the features into invariant and spurious
+        self.projection_phi = nn.Linear(self.z_dim, self.c_dim)  # Project to invariant features
+        self.projection_psi = nn.Linear(self.z_dim, self.s_dim)  # Project to spurious features
+
+        # Define the classifier (based on invariant features)
+        self.classifier = nn.Sequential(
+            nn.Linear(self.c_dim, 512),
+            nn.BatchNorm1d(512),
+            nn.ReLU(),
+            nn.Dropout(),
+            nn.Linear(512, args.num_classes)
+        )
+
+    def forward(self, x):
+        """
+        只返回分类结果（logits），不进行解藕操作
+        """
+        # 获取解藕后的不变特征和虚假特征
+        z_u, z_s = self.extract_feature(x)
+
+        # 通过不变特征进行分类
+        logits = self.classifier(z_u)
+
+        return logits
+
+    def extract_feature(self, x):
+        """
+        提取特征并进行解藕，将特征解耦为不变特征（z_u）和虚假特征（z_s）
+        """
+        # Step 1: Extract features using the backbone
+        x_feat = self.backbone(x)  # The output of the backbone network
+
+        # Step 2: Project to the latent space
+        z = self.encoder(x_feat)
+
+        # Step 3: Apply projections to decouple into invariant and spurious features
+        z_u = self.projection_phi(z)  # Invariant features
+        z_s = self.projection_psi(z)  # Spurious features
+
+        return z_u, z_s
+
+
+    def get_parameters(self, base_lr=1.0):
+        """返回优化器所需的参数列表，支持为不同模块设置不同的学习率"""
+
+        # 通过 itertools.chain() 可以连接多个层的参数
+        base_params = itertools.chain(self.encoder.parameters(),
+                                      self.projection_phi.parameters(),
+                                      self.projection_psi.parameters(),
+                                      self.classifier.parameters())
+
+        params = [
+            {"params": self.backbone.parameters(), "lr": 0.1 * base_lr},  # backbone 使用较小的学习率
+            {"params": base_params, "lr": 1.0 * base_lr},  # projection_phi, projection_psi, classifier 使用默认学习率
+        ]
+
+        return params
+
+
 class MLP(nn.Module):
     def __init__(self, input_dim, output_dim, n_layers=1, hidden_dim=1024):
         super(MLP, self).__init__()
