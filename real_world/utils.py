@@ -216,7 +216,7 @@ def get_dataset(dataset_name, root, source, target, train_source_transform, val_
     return train_source_dataset, val_dataset, test_dataset, num_classes, class_names
 
 
-def validate_classifier(vae_model, stable_classifier, unstable_classifier, val_loader, args, device):
+def validate_classifier(decoupler_model, stable_classifier, unstable_classifier, val_loader, args, device):
     # 定义统计指标
     batch_time = AverageMeter('Time', ':6.3f')
     stable_losses = AverageMeter('Loss', ':6.3f')
@@ -241,7 +241,7 @@ def validate_classifier(vae_model, stable_classifier, unstable_classifier, val_l
             target = target.to(device)
 
             # 使用VAE模型提取特征
-            content, style = extract_features(vae_model, images, target)
+            content, style = decoupler_model.extract_feature(images)
 
             # 使用稳定分类器进行预测
             stable_output = stable_classifier(content)

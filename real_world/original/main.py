@@ -464,7 +464,7 @@ if __name__ == '__main__':
 
     # 设置输入维度和隐藏层维度
     args.input_dim = 2048
-    if 'pacs' in args.root:
+    if 'pacs-vae' in args.root:
         args.input_dim = 512
         args.hidden_dim = 256
     args.norm_id = args.n_domains - 1

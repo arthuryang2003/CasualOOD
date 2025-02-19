@@ -48,38 +48,56 @@ class Decoupler(nn.Module):
         dim = args.hidden_dim
 
         # Define the backbone (feature extractor)
-        self.backbone = backbone_net
+        self.backbone_net = backbone_net
+
+        self.pool_layer = nn.Sequential(nn.AdaptiveAvgPool2d(output_size=(1,1)), nn.Flatten())
 
         # Define the encoder to map features to latent space
         self.encoder = nn.Sequential(
             nn.Linear(self.backbone_net.out_features, dim),  # 假设backbone的输出是out_features维度
+            nn.BatchNorm1d(dim),
             nn.ReLU(),
+            nn.Dropout(),
             nn.Linear(dim, self.z_dim)  # 潜在空间的维度是z_dim
         )
-
 
         # Projection layers for decoupling the features into invariant and spurious
         self.projection_phi = nn.Linear(self.z_dim, self.c_dim)  # Project to invariant features
         self.projection_psi = nn.Linear(self.z_dim, self.s_dim)  # Project to spurious features
 
-        # Define the classifier (based on invariant features)
-        self.classifier = nn.Sequential(
-            nn.Linear(self.c_dim, 512),
-            nn.BatchNorm1d(512),
+        # Classifiers for stable (content) and unstable (style) features
+        self.classifier_stable = nn.Sequential(
+            nn.Linear(self.c_dim, dim),
+            nn.BatchNorm1d(dim),
             nn.ReLU(),
             nn.Dropout(),
-            nn.Linear(512, args.num_classes)
+            nn.Linear(dim, args.num_classes)
         )
 
+        self.classifier_unstable = nn.Sequential(
+            nn.Linear(self.s_dim, dim),
+            nn.BatchNorm1d(dim),
+            nn.ReLU(),
+            nn.Dropout(),
+            nn.Linear(dim, args.num_classes)
+        )
+
+    def predict_stable(self, z_u):
+
+        return self.classifier_stable(z_u)
+
+    def predict_unstable(self, z_s):
+
+        return self.classifier_unstable(z_s)
+
+
     def forward(self, x):
-        """
-        只返回分类结果（logits），不进行解藕操作
-        """
+
         # 获取解藕后的不变特征和虚假特征
-        z_u, z_s = self.extract_feature(x)
+        z_u, _ = self.extract_feature(x)
 
         # 通过不变特征进行分类
-        logits = self.classifier(z_u)
+        logits = self.classifier_stable(z_u)
 
         return logits
 
@@ -107,14 +125,23 @@ class Decoupler(nn.Module):
         base_params = itertools.chain(self.encoder.parameters(),
                                       self.projection_phi.parameters(),
                                       self.projection_psi.parameters(),
-                                      self.classifier.parameters())
+                                      self.classifier_stable.parameters(),
+                                      self.classifier_unstable.parameters())
 
         params = [
-            {"params": self.backbone.parameters(), "lr": 0.1 * base_lr},  # backbone 使用较小的学习率
+            {"params": self.backbone_net.parameters(), "lr": 0.1 * base_lr},  # backbone 使用较小的学习率
             {"params": base_params, "lr": 1.0 * base_lr},  # projection_phi, projection_psi, classifier 使用默认学习率
         ]
 
         return params
+
+    def backbone(self, x):
+        out = self.backbone_net(x)
+        if len(out.size()) > 2:
+            out = self.pool_layer(out)
+        return out
+
+
 
 
 class MLP(nn.Module):

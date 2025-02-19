@@ -221,9 +221,13 @@ def train_decoupler(train_source_iter: ForeverDataIterator, val_iter: ForeverDat
             # 特征提取
 
             logits = model(img_dom)  # 获得分类结果和解藕后的特征
-            z_u,z_s=model.extrect_feature(img_dom)
+            z_u,z_s=model.extract_feature(img_dom)
+
+            stable_logits=model.predict_stable(z_u)
+
+            unstable_logits=model.predict_unstable(z_s)
             # 分类损失
-            loss_cls = F.cross_entropy(logits, label_dom)
+            loss_cls = F.cross_entropy(stable_logits, label_dom)
 
             # 计算解藕损失（互信息损失）
             # 计算不变特征和虚假特征之间的余弦相似度
@@ -232,9 +236,9 @@ def train_decoupler(train_source_iter: ForeverDataIterator, val_iter: ForeverDat
             loss_MI = torch.mean(sim ** 2)
 
             # 计算可变特征的KL散度损失
-            # 目标是使虚假特征的分布接近标准正态分布
-            q_dist = torch.distributions.Normal(torch.zeros_like(z_s), torch.ones_like(z_s))
-            log_qz = q_dist.log_prob(z_s)
+            # 目标是让不稳定预测标签（基于z_s）接近标准正态分布
+            q_dist = torch.distributions.Normal(torch.zeros_like(unstable_logits), torch.ones_like(unstable_logits))
+            log_qz = q_dist.log_prob(unstable_logits)
             loss_kl = -log_qz.mean()
 
             # 解藕总损失 = 解藕正则化损失 + KL损失
@@ -409,7 +413,7 @@ def train_stable(train_source_iter: ForeverDataIterator,
 
             with torch.no_grad():
                 # 提取稳定特征（content）
-                content, _ = decoupler.extract_feature(img_dom)  # 提取不变特征
+                content, _ = decoupler.extract_feature(img_val)  # 提取不变特征
                 # 使用稳定特征进行分类
                 logits = stable_classifier.classifier(content)  # 分类
 
@@ -554,7 +558,7 @@ def train_unstable(train_source_iter: ForeverDataIterator,
 
             with torch.no_grad():
                 # 提取不稳定特征（style）
-                _, style = decoupler.extract_feature(img_dom)  # 提取可变特征
+                _, style = decoupler.extract_feature(img_val)  # 提取可变特征
                 # 使用不稳定特征进行分类
                 logits = unstable_classifier.classifier(style)  # 分类
 

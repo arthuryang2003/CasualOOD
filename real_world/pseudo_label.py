@@ -23,7 +23,7 @@ def combined_inference(decoupler_model,stable_classifier, unstable_classifier, t
             domains=domains.to(device)
 
             # decoupler model inference to decouple content and style
-            z_content,_=decoupler_model(data)
+            z_content,_=decoupler_model.extract_feature(data)
 
             # Stable model prediction using content (z_content)
             stable_pred = stable_classifier(z_content)
@@ -64,7 +64,7 @@ def combined_inference(decoupler_model,stable_classifier, unstable_classifier, t
             domains=domains.to(device)
 
             # decoupler model inference to decouple content and style
-            z_content, z_style = decoupler_model(data)
+            z_content, z_style = decoupler_model.extract_feature(data)
 
             # Stable model prediction using content (z_content)
             stable_pred = stable_classifier(z_content)

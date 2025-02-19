@@ -141,7 +141,7 @@ def main(args: argparse.Namespace):
               lr_scheduler, epoch, args, total_iter, backbone)
 
         # evaluate on validation set
-        acc1 = utils.validate_decoupler(val_loader, decoupler_model, args,total_iter, device)
+        acc1 = utils.validate_decoupler(val_loader, decoupler_model, args, device)
         print("acc1 = {:3.4f}".format(acc1))
         wandb.log({"decoupler Val Acc": acc1})
         message = '(epoch %d): decoupler Val Acc %.3f' % (epoch+1, acc1)
@@ -160,7 +160,7 @@ def main(args: argparse.Namespace):
     print("best_acc1 = {:3.4f}".format(best_acc1))
     # evaluate on test set
     decoupler_model.load_state_dict(torch.load(logger.get_checkpoint_path('best_decoupler')))
-    acc1 = utils.validate_decoupler(test_loader, decoupler_model, args, total_iter,device)
+    acc1 = utils.validate_decoupler(test_loader, decoupler_model, args,device)
     print("decoupler Best test_acc1 = {:3.2f}".format(acc1))
 
     for param in decoupler_model.parameters():
@@ -264,7 +264,7 @@ def main(args: argparse.Namespace):
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description='DANN for Unsupervised Domain Adaptation')
     # 数据集参数
-    parser.add_argument('--root', type=str, default='../../da_datasets/pacs',
+    parser.add_argument('--root', type=str, default='../../da_datasets/pacs-vae',
                         help='root path of dataset')   
     parser.add_argument('-d', '--data', metavar='DATA', default='PACS', choices=utils.get_dataset_names(),
                         help='dataset: ' + ' | '.join(utils.get_dataset_names()) +
@@ -331,8 +331,9 @@ if __name__ == '__main__':
                              "When phase is 'analysis', only analysis the model.")
     # 模型超参数
     parser.add_argument('--z_dim', type=int, default=64, metavar='N')
+    # parser.add_argument('--c_dim', type=int, default=32, metavar='N')
     parser.add_argument('--train_batch_size', default=16, type=int)
-    parser.add_argument('--s_dim', type=int, default=4, metavar='N')
+    parser.add_argument('--s_dim', type=int, default=32, metavar='N')
     parser.add_argument('--hidden_dim', type=int, default=4096, metavar='N')
     parser.add_argument('--beta', type=float, default=1., metavar='N')
     parser.add_argument('--name', type=str, default='ours_PACS_KL_dim_8', metavar='N')
@@ -370,7 +371,7 @@ if __name__ == '__main__':
     args.target = [i for i in args.target.split(',')]
     args.n_domains = len(args.source) + len(args.target)
     args.input_dim = 2048
-    if 'pacs' in args.root:
+    if 'pacs-vae' in args.root:
         args.input_dim = 512
         args.hidden_dim = 256
     args.norm_id = args.n_domains - 1
