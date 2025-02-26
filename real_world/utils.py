@@ -183,8 +183,10 @@ def get_dataset(dataset_name, root, source, target, train_source_transform, val_
             # PACS dataset loading
             train_source_dataset = concat_dataset(root=root, tasks=source, download=True, split='train', phase='train',
                                                   transform=train_source_transform)
-            val_dataset = concat_dataset(root=root, tasks=source, download=True, split='test', phase='val',
+            val_source_dataset = concat_dataset(root=root, tasks=source, download=True, split='test', phase='val',
                                          transform=val_transform)
+            train_target_dataset = concat_dataset(root=root, tasks=target, download=True, split='test',phase='test', transform=train_target_transform)
+            val_target_dataset=concat_dataset(root=root, tasks=target, download=True, split='train',phase='test', transform=val_transform)
 
             # train_source_dataset = concat_and_split_dataset(tasks=source, split_ratio=0.8, root=root,
             #                                                 download=True, phase='train',
@@ -198,8 +200,7 @@ def get_dataset(dataset_name, root, source, target, train_source_transform, val_
             val_dataset = concat_and_split_dataset(tasks=source, split_ratio=0.8, root=root,
                                                    download=True, phase='val', transform=val_transform)[1]
 
-
-        test_dataset = concat_dataset(root=root, tasks=target, download=True, phase='test', transform=val_transform)
+        test_dataset=concat_dataset(root=root, tasks=target, download=True, phase='test',transform=val_transform)
         # Extract class names and number of classes
         class_names = test_dataset.datasets[0].classes
         num_classes = len(class_names)
@@ -213,7 +214,7 @@ def get_dataset(dataset_name, root, source, target, train_source_transform, val_
         train_source_dataset = convert_from_wilds_dataset(dataset.get_subset('train', transform=train_source_transform))
         train_target_dataset = convert_from_wilds_dataset(dataset.get_subset('test', transform=train_target_transform))
         val_dataset = test_dataset = convert_from_wilds_dataset(dataset.get_subset('test', transform=val_transform))
-    return train_source_dataset, val_dataset, test_dataset, num_classes, class_names
+    return train_source_dataset, train_target_dataset,val_source_dataset, val_target_dataset,test_dataset, num_classes, class_names
 
 
 def validate_classifier(decoupler_model, stable_classifier, unstable_classifier, val_loader, args, device):
