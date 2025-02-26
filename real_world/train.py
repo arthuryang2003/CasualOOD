@@ -281,12 +281,9 @@ def CasualOOD_finetune(train_target_iter: ForeverDataIterator, val_iter: Forever
 
         # 更新统计数据
         cls_losses.update(mean_cls_losses.item(), y_s.size(0))  # 更新分类损失
-        stable_cls_losses.update(mean_cls_u.item(), y_s.size(0))
         unstable_cls_losses.update(mean_cls_s.item(), y_s.size(0))
         cls_accs.update(cls_acc.item(), y_s.size(0))  # 更新分类准确率
         total_losses.update(loss.item(), y_s.size(0))  # 更新总损失
-        KL_losses.update(mean_kl_losses.item(), y_s.size(0))
-        MI_losses.update(mean_MI_losses.item(), y_s.size(0))
 
         # 计算梯度并执行 SGD 步骤
         optimizer.zero_grad()
@@ -326,6 +323,4 @@ def CasualOOD_finetune(train_target_iter: ForeverDataIterator, val_iter: Forever
                 "Train Acc": cls_acc.item(),
                 "Train Loss": loss.item(),
                 "Train Cls Loss": mean_cls_losses.item(),
-                "Train KL": mean_kl_losses.item(),
-                "Train MI Loss": mean_MI_losses.item(),
             })
