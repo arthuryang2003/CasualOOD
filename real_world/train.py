@@ -241,10 +241,10 @@ def CasualOOD_finetune(train_target_iter: ForeverDataIterator, val_iter: Forever
 
         loss_cls_s = F.cross_entropy(tilde_s_logits, pseudo_labels)
 
-        logits = u_logits + tilde_s_logits
+        logits =  tilde_s_logits
         
         # 分类损失
-        loss_cls = loss_cls_u + loss_cls_s
+        loss_cls = loss_cls_s
 
         # 计算解藕损失（互信息损失）
         sim = F.cosine_similarity(z_u, z_s, dim=1)
@@ -257,23 +257,22 @@ def CasualOOD_finetune(train_target_iter: ForeverDataIterator, val_iter: Forever
 
         # 解藕总损失 = 解藕正则化损失 + KL损失
         losses_cls.append(loss_cls)
-        losses_cls_u.append(loss_cls_u)
+        # losses_cls_u.append(loss_cls_u)
         losses_cls_s.append(loss_cls_s)
         losses_MI.append(loss_MI)
         losses_KL.append(loss_kl)
         y_s.append(logits)
-        labels_s.append(label_dom)
+        labels_s.append(pseudo_labels)
         z_all.append(z_u)
 
         # 计算总的分类损失、解藕损失和KL损失
         mean_cls_losses = torch.stack(losses_cls, 0).mean()
-        mean_cls_u = torch.stack(losses_cls_u, 0).mean()
+
         mean_cls_s = torch.stack(losses_cls_s, 0).mean()
-        mean_MI_losses = torch.stack(losses_MI, 0).mean()
-        mean_kl_losses = torch.stack(losses_KL, 0).mean()
+
 
         # 总损失 = 分类损失 + 解藕损失
-        loss = mean_cls_losses + args.decouple_alpha * mean_kl_losses + args.decouple_beta * mean_MI_losses
+        loss = mean_cls_losses
 
         # 合并目标域标签和预测结果，计算分类准确率
         y_s = torch.cat(y_s, 0)
