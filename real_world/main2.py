@@ -22,7 +22,7 @@ import wandb
 
 from extract_features import extract_features
 from pseudo_label import combined_inference
-from train import  CasualOOD_train
+from train import  CasualOOD_train,CasualOOD_finetune
 
 import utils
 from common.modules.networks import iVAE,Classifier,Decoupler
@@ -33,7 +33,7 @@ from common.utils.logger import CompleteLogger
 from common.utils.analysis import collect_feature, tsne, a_distance
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-# os.environ['WANDB_MODE'] = 'disabled'
+os.environ['WANDB_MODE'] = 'disabled'
 
 def main(args: argparse.Namespace):
     logger = CompleteLogger(args.log, args.phase)
@@ -97,14 +97,14 @@ def main(args: argparse.Namespace):
 
     print(optimizer.param_groups[0]['lr'], ' *** lr')
     lr_scheduler = LambdaLR(optimizer, lambda x:  args.lr * (1. + args.lr_gamma * float(x)) ** (-args.lr_decay))
-    print(lr_scheduler.param_groups[0]['lr'], ' *** lr')
+    print(optimizer.param_groups[0]['lr'], ' *** lr')
 
     # define finetune optimizer and lr scheduler
     finetune_optimizer = SGD(model.get_parameters(),
                     lr=args.lr, momentum=args.momentum, weight_decay=args.weight_decay, nesterov=True)
 
     print(finetune_optimizer.param_groups[0]['lr'], ' *** lr')
-    lr_scheduler = LambdaLR(finetune_optimizer, lambda x:  args.lr * (1. + args.lr_gamma * float(x)) ** (-args.lr_decay))
+    finetune_lr_scheduler = LambdaLR(finetune_optimizer, lambda x:  args.lr * (1. + args.lr_gamma * float(x)) ** (-args.lr_decay))
     print(finetune_optimizer.param_groups[0]['lr'], ' *** lr')
 
 
@@ -116,17 +116,46 @@ def main(args: argparse.Namespace):
         model.load_state_dict(torch.load(logger.get_checkpoint_path('best_model.pth')))
 
     if args.phase == 'test':
+        # start test and finetune
+        total_iter = 0
+        best_acc2 = 0.
+        for epoch in range(args.finetune_epochs):
+            print("lr:", finetune_lr_scheduler.get_last_lr(), finetune_optimizer.param_groups[0]['lr'])
+            # train for one epoch
+            CasualOOD_finetune(train_target_iter, val_target_iter, model, finetune_optimizer,
+                               lr_scheduler, epoch, args, total_iter, backbone)
 
+            # evaluate on validation set
+            acc2 = combined_inference(model, val_target_loader, num_classes)
+            print("acc2 = {:3.4f}".format(acc2))
+            wandb.log({"Model Val Acc": acc2})
+            message = '(epoch %d): Model Val Acc %.3f' % (epoch + 1, acc2)
+            print(message)
+            record = open(test_logger, 'a')
+            record.write(message + '\n')
+            record.close()
 
-        combined_acc = combined_inference(model,test_loader, num_classes)
+            # remember best acc@1 and save checkpoint
+            torch.save(model.state_dict(), logger.get_checkpoint_path('latest_model'))
+            if acc2 > best_acc2:
+                shutil.copy(logger.get_checkpoint_path('latest_model'), logger.get_checkpoint_path('best_model'))
 
-        print("Final Combined Model Test Acc = {:3.2f}".format(combined_acc))
+            best_acc2 = max(acc2, best_acc2)
+
+        print("best_acc2 = {:3.4f}".format(best_acc2))
+        # evaluate on test set
+        model.load_state_dict(torch.load(logger.get_checkpoint_path('best_model')))
+        acc2 = combined_inference(model, test_loader, num_classes)
+        print("Test Phase Best test_acc = {:3.2f}".format(acc2))
+
         return
 
+
+    model.set_requires_grad(True)
     # start training
     total_iter = 0
     best_acc1=0.
-    for epoch in range(args.decoupler_epochs):
+    for epoch in range(args.train_epochs):
         print("lr:", lr_scheduler.get_last_lr(), optimizer.param_groups[0]['lr'])
         # train for one epoch
         CasualOOD_train(train_source_iter, val_source_iter, model, optimizer,
@@ -155,18 +184,41 @@ def main(args: argparse.Namespace):
     acc1 = utils.validate_decoupler(test_loader, model, args,device)
     print("Train Phase Best test_acc1 = {:3.2f}".format(acc1))
 
-    for param in model.parameters():
-        param.requires_grad = False
 
+    model.set_requires_grad(False)
 
+    # start test and finetune
+    total_iter = 0
+    best_acc2=0.
+    for epoch in range(args.finetune_epochs):
+        print("lr:", finetune_lr_scheduler.get_last_lr(), finetune_optimizer.param_groups[0]['lr'])
+        # train for one epoch
+        CasualOOD_finetune(train_target_iter, val_target_iter, model, finetune_optimizer,
+                        lr_scheduler, epoch, args, total_iter, backbone)
 
+        # evaluate on validation set
+        acc2 =  combined_inference(model, val_target_loader, num_classes)
+        print("acc2 = {:3.4f}".format(acc2))
+        wandb.log({"Model Val Acc": acc2})
+        message = '(epoch %d): Model Val Acc %.3f' % (epoch+1, acc2)
+        print(message)
+        record = open(test_logger, 'a')
+        record.write(message+'\n')
+        record.close()
 
-    # 评估组合模型
+        # remember best acc@1 and save checkpoint
+        torch.save(model.state_dict(), logger.get_checkpoint_path('latest_model'))
+        if acc2 > best_acc2:
+            shutil.copy(logger.get_checkpoint_path('latest_model'), logger.get_checkpoint_path('best_model'))
 
-    combined_acc= combined_inference(decoupler_model,stable_classifier, unstable_classifier, test_loader, num_classes)
+        best_acc2 = max(acc2, best_acc2)
 
-    # 分别打印准确率
-    print("Final Combined Model Test Acc = {:3.2f}".format(combined_acc))
+    print("best_acc2 = {:3.4f}".format(best_acc2))
+    # evaluate on test set
+    model.load_state_dict(torch.load(logger.get_checkpoint_path('best_model')))
+    acc2 = combined_inference(model, test_loader, num_classes)
+    print("Test Phase Best test_acc = {:3.2f}".format(acc2))
+
 
     logger.close()
 
@@ -175,7 +227,7 @@ def main(args: argparse.Namespace):
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description='DANN for Unsupervised Domain Adaptation')
     # 数据集参数
-    parser.add_argument('--root', type=str, default='../../da_datasets/pacs-vae',
+    parser.add_argument('--root', type=str, default='../../da_datasets/pacs',
                         help='root path of dataset')   
     parser.add_argument('-d', '--data', metavar='DATA', default='PACS', choices=utils.get_dataset_names(),
                         help='dataset: ' + ' | '.join(utils.get_dataset_names()) +
@@ -271,6 +323,10 @@ if __name__ == '__main__':
                         help='number of unstable epochs to run')
     parser.add_argument('--decoupler_epochs', type=int, default=1, metavar='N',
                         help='number of decoupler epochs to run')
+    parser.add_argument('--train_epochs', type=int, default=1, metavar='N',
+                        help='number of train epochs to run')
+    parser.add_argument('--finetune_epochs', type=int, default=1, metavar='N',
+                        help='number of finetune epochs to run')
     parser.add_argument('--target_split_ratio', type=float, default=0.8, metavar='N',
                         help='ratio of target domain data used for training set (rest for testing)')
 

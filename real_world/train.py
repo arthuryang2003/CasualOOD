@@ -184,9 +184,7 @@ def CasualOOD_finetune(train_target_iter: ForeverDataIterator, val_iter: Forever
     # 定义统计指标
     batch_time = AverageMeter('Time', ':5.2f')
     data_time = AverageMeter('Data', ':5.2f')
-    total_losses = AverageMeter('total', ':4.2f')  # 解藕损失
-    KL_losses = AverageMeter('KL', ':4.2f')  # 解藕损失
-    MI_losses = AverageMeter('MI', ':4.2f')  # 解藕损失
+    total_losses = AverageMeter('total', ':4.2f')  # 总损失
     stable_cls_losses = AverageMeter('Cls_u', ':4.2f')
     unstable_cls_losses = AverageMeter('Cls_s', ':4.2f')
     cls_losses = AverageMeter('Cls', ':4.2f')  # 分类损失
@@ -194,7 +192,7 @@ def CasualOOD_finetune(train_target_iter: ForeverDataIterator, val_iter: Forever
     val_accs = AverageMeter('Val Acc', ':3.2f')  # 验证准确率
     progress = ProgressMeter(
         args.iters_per_epoch,
-        [batch_time, data_time, cls_losses, total_losses, cls_accs, stable_cls_losses, unstable_cls_losses, KL_losses, MI_losses, val_accs],
+        [batch_time, data_time, cls_losses, total_losses, cls_accs, stable_cls_losses, unstable_cls_losses, val_accs],
         prefix="Epoch: [{}]".format(epoch)
     )
 
@@ -233,11 +231,9 @@ def CasualOOD_finetune(train_target_iter: ForeverDataIterator, val_iter: Forever
         # 特征提取
         z_u, z_s, u_logits, s_logits, tilde_s_logits = model.encode(img_train)
 
-
         # 生成伪标签
         pseudo_labels = torch.argmax(u_logits, dim=1)
         pseudo_labels = pseudo_labels.to(device)  # 使用伪标签
-
 
         loss_cls_s = F.cross_entropy(tilde_s_logits, pseudo_labels)
 
@@ -246,21 +242,11 @@ def CasualOOD_finetune(train_target_iter: ForeverDataIterator, val_iter: Forever
         # 分类损失
         loss_cls = loss_cls_s
 
-        # 计算解藕损失（互信息损失）
-        sim = F.cosine_similarity(z_u, z_s, dim=1)
-        loss_MI = torch.mean(sim ** 2)
-
-        # 计算可变特征的KL散度损失
-        q_dist = torch.distributions.Normal(torch.zeros_like(s_logits), torch.ones_like(s_logits))
-        log_qz = q_dist.log_prob(s_logits)
-        loss_kl = -log_qz.mean()
-
         # 解藕总损失 = 解藕正则化损失 + KL损失
         losses_cls.append(loss_cls)
         # losses_cls_u.append(loss_cls_u)
         losses_cls_s.append(loss_cls_s)
-        losses_MI.append(loss_MI)
-        losses_KL.append(loss_kl)
+
         y_s.append(logits)
         labels_s.append(pseudo_labels)
         z_all.append(z_u)
@@ -271,7 +257,7 @@ def CasualOOD_finetune(train_target_iter: ForeverDataIterator, val_iter: Forever
         mean_cls_s = torch.stack(losses_cls_s, 0).mean()
 
 
-        # 总损失 = 分类损失 + 解藕损失
+        # 总损失 = 分类损失
         loss = mean_cls_losses
 
         # 合并目标域标签和预测结果，计算分类准确率
@@ -288,13 +274,6 @@ def CasualOOD_finetune(train_target_iter: ForeverDataIterator, val_iter: Forever
         # 计算梯度并执行 SGD 步骤
         optimizer.zero_grad()
         loss.backward()
-
-        # 只更新 temperature 参数
-        for param_group in optimizer.param_groups:
-            for param in param_group['params']:
-                if 'temperature' not in param.name:  # 判断是否为 temperature 参数
-                    param.requires_grad = False  # 冻结其他参数
-
         optimizer.step()
         lr_scheduler.step()  # 更新学习率
 

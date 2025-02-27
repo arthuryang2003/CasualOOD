@@ -42,7 +42,7 @@ class Decoupler(nn.Module):
 
         # latent space dimensions
         self.z_dim = args.z_dim  # 总潜在空间的维度
-        self.s_dim = args.s_dim  # 虚假特征的维度
+        self.s_dim = args.z_dim  # 虚假特征的维度
         self.c_dim = self.z_dim - self.s_dim  # 不变特征的维度
 
         dim = args.hidden_dim
@@ -228,15 +228,15 @@ class CasualOOD(nn.Module):
         return out
 
     def predict_u(self, z_u):
-        u_logits = self.classifier(z_u)
+        u_logits = self.classifier_u(z_u)
         return u_logits
 
     def predict_s(self, z_s):
-        s_logits = self.classifier(z_s)
+        s_logits = self.classifier_s(z_s)
         return s_logits
 
     def predict_tilde_s(self, tilde_z_s):
-        tilde_s_logits = self.classifier(tilde_z_s)
+        tilde_s_logits = self.classifier_tilde_s(tilde_z_s)
         return tilde_s_logits
 
     def domain_influence(self, z_s, hard=False):
