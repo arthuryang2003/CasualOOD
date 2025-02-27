@@ -6,6 +6,9 @@ import argparse
 import shutil
 import os.path as osp
 import os
+
+from common.modules.networks import CasualOOD
+
 sys.path.append('.')
 
 import torch
@@ -19,7 +22,7 @@ import wandb
 
 from extract_features import extract_features
 from pseudo_label import combined_inference
-from train import  train_stable,train_unstable,train_VAE,train_decoupler
+from train import  CasualOOD_train,CasualOOD_finetune
 
 import utils
 from common.modules.networks import iVAE,Classifier,Decoupler
@@ -30,7 +33,7 @@ from common.utils.logger import CompleteLogger
 from common.utils.analysis import collect_feature, tsne, a_distance
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-# os.environ['WANDB_MODE'] = 'disabled'
+os.environ['WANDB_MODE'] = 'disabled'
 
 def main(args: argparse.Namespace):
     logger = CompleteLogger(args.log, args.phase)
@@ -57,7 +60,7 @@ def main(args: argparse.Namespace):
     print("train_transform: ", train_transform)
     print("val_transform: ", val_transform)
 
-    train_source_dataset, val_dataset, test_dataset, args.num_classes, args.class_names = \
+    train_source_dataset, train_target_dataset, val_source_dataset, val_target_dataset, test_dataset, args.num_classes, args.class_names=\
         utils.get_dataset(args.data, args.root, args.source, args.target, train_transform, val_transform)
     train_source_loader = DataLoader(train_source_dataset, batch_size=(args.n_domains-1)*args.train_batch_size,
                                      num_workers=args.workers, drop_last=True,
@@ -65,197 +68,159 @@ def main(args: argparse.Namespace):
                                      shuffle=True,
                                      )
 
-    val_loader = DataLoader(val_dataset, batch_size=args.batch_size, shuffle=False, num_workers=args.workers)
+    val_source_loader = DataLoader(val_source_dataset, batch_size=args.batch_size, shuffle=False, num_workers=args.workers)
+    train_target_loader = DataLoader(train_target_dataset, batch_size=args.batch_size,
+                                     num_workers=args.workers, drop_last=True,
+                                     #sampler=_make_balanced_sampler(train_source_dataset.domain_ids)
+                                     shuffle=True,
+                                     )
+
+    val_target_loader = DataLoader(val_target_dataset, batch_size=args.batch_size, shuffle=False, num_workers=args.workers)
+
     test_loader = DataLoader(test_dataset, batch_size=args.batch_size, shuffle=False, num_workers=args.workers)
 
     train_source_iter = ForeverDataIterator(train_source_loader)
-    val_iter = ForeverDataIterator(val_loader)
+    val_source_iter = ForeverDataIterator(val_source_loader)
+    train_target_iter = ForeverDataIterator(train_target_loader)
+    val_target_iter = ForeverDataIterator(val_target_loader)
 
     # 通过目标数据集计算类别数量
     num_classes = args.num_classes
 
-
     print("=> using model '{}'".format(args.arch))
     backbone = utils.get_model(args.arch, pretrain=not args.scratch)
 
-    decoupler_model=Decoupler(args, backbone_net=backbone).to(device)
+    model=CasualOOD(args, backbone_net=backbone).to(device)
     # define optimizer and lr scheduler
-    decoupler_optimizer = SGD(decoupler_model.get_parameters(),
+    optimizer = SGD(model.get_parameters(),
                     lr=args.lr, momentum=args.momentum, weight_decay=args.weight_decay, nesterov=True)
 
-    print(decoupler_optimizer.param_groups[0]['lr'], ' *** lr')
-    lr_scheduler = LambdaLR(decoupler_optimizer, lambda x:  args.lr * (1. + args.lr_gamma * float(x)) ** (-args.lr_decay))
-    print(decoupler_optimizer.param_groups[0]['lr'], ' *** lr')
+    print(optimizer.param_groups[0]['lr'], ' *** lr')
+    lr_scheduler = LambdaLR(optimizer, lambda x:  args.lr * (1. + args.lr_gamma * float(x)) ** (-args.lr_decay))
+    print(optimizer.param_groups[0]['lr'], ' *** lr')
 
-    # 初始化稳定分类器和不稳定分类器
-    stable_classifier = Classifier(args, input_size=args.c_dim).to(device)  # 稳定模型分类器，输入为c_dim
-    unstable_classifier = Classifier(args, input_size=args.s_dim).to(device)  # 不稳定模型分类器，输入为s_dim
+    # define finetune optimizer and lr scheduler
+    finetune_optimizer = SGD(model.get_parameters(),
+                    lr=args.lr, momentum=args.momentum, weight_decay=args.weight_decay, nesterov=True)
 
-    # 稳定分类器的优化器和学习率调度器
-    stable_optimizer = SGD(stable_classifier.parameters(),
-                           lr=args.lr, momentum=args.momentum, weight_decay=args.weight_decay, nesterov=True)
-    print(stable_optimizer.param_groups[0]['lr'], ' *** lr for stable classifier')
-    stable_lr_scheduler = LambdaLR(stable_optimizer,
-                                   lambda x: args.lr * (1. + args.lr_gamma * float(x)) ** (-args.lr_decay))
-    print(stable_optimizer.param_groups[0]['lr'], ' *** lr for stable classifier after scheduler')
-
-    # 不稳定分类器的优化器和学习率调度器
-    unstable_optimizer = SGD(unstable_classifier.parameters(),
-                             lr=args.lr, momentum=args.momentum, weight_decay=args.weight_decay, nesterov=True)
-    print(unstable_optimizer.param_groups[0]['lr'], ' *** lr for unstable classifier')
-    unstable_lr_scheduler = LambdaLR(unstable_optimizer,
-                                     lambda x: args.lr * (1. + args.lr_gamma * float(x)) ** (-args.lr_decay))
-    print(unstable_optimizer.param_groups[0]['lr'], ' *** lr for unstable classifier after scheduler')
+    print(finetune_optimizer.param_groups[0]['lr'], ' *** lr')
+    finetune_lr_scheduler = LambdaLR(finetune_optimizer, lambda x:  args.lr * (1. + args.lr_gamma * float(x)) ** (-args.lr_decay))
+    print(finetune_optimizer.param_groups[0]['lr'], ' *** lr')
 
 
 
     test_logger = '%s/test.txt' % (args.log)
 
     if args.phase != 'train':
-        stable_classifier.load_state_dict(torch.load(logger.get_checkpoint_path('best_stable')))
-        unstable_classifier.load_state_dict(torch.load(logger.get_checkpoint_path('best_unstable')))
-        decoupler_model.load_state_dict(torch.load(logger.get_checkpoint_path('best_decoupler')))
+
+        model.load_state_dict(torch.load(logger.get_checkpoint_path('best_model.pth')))
 
     if args.phase == 'test':
-        acc1, _ = utils.validate(test_loader, decoupler_model, args, 0, device)
-        print("decoupler Best test_acc1 = {:3.2f}".format(acc1))
+        # start test and finetune
+        total_iter = 0
+        best_acc2 = 0.
+        for epoch in range(args.finetune_epochs):
+            print("lr:", finetune_lr_scheduler.get_last_lr(), finetune_optimizer.param_groups[0]['lr'])
+            # train for one epoch
+            CasualOOD_finetune(train_target_iter, val_target_iter, model, finetune_optimizer,
+                               lr_scheduler, epoch, args, total_iter, backbone)
 
-        # 调用 validate_classifier 函数进行验证
-        acc2, acc3 = utils.validate_classifier(decoupler_model, stable_classifier, unstable_classifier, test_loader,
-                                               args, device)
-        print("Final Best Stable Classifier test_acc2 = {:3.2f}".format(acc2))
-        print("Final Best Unstable Classifier test_acc3 = {:3.2f}".format(acc3))
+            # evaluate on validation set
+            acc2 = combined_inference(model, val_target_loader, num_classes)
+            print("acc2 = {:3.4f}".format(acc2))
+            wandb.log({"Model Val Acc": acc2})
+            message = '(epoch %d): Model Val Acc %.3f' % (epoch + 1, acc2)
+            print(message)
+            record = open(test_logger, 'a')
+            record.write(message + '\n')
+            record.close()
 
-        combined_acc = combined_inference(decoupler_model, stable_classifier, unstable_classifier, test_loader, num_classes)
+            # remember best acc@1 and save checkpoint
+            torch.save(model.state_dict(), logger.get_checkpoint_path('latest_model'))
+            if acc2 > best_acc2:
+                shutil.copy(logger.get_checkpoint_path('latest_model'), logger.get_checkpoint_path('best_model'))
 
-        print("Final Combined Model Test Acc = {:3.2f}".format(combined_acc))
+            best_acc2 = max(acc2, best_acc2)
+
+        print("best_acc2 = {:3.4f}".format(best_acc2))
+        # evaluate on test set
+        model.load_state_dict(torch.load(logger.get_checkpoint_path('best_model')))
+        acc2 = combined_inference(model, test_loader, num_classes)
+        print("Test Phase Best test_acc = {:3.2f}".format(acc2))
+
         return
 
+
+    model.set_requires_grad(True)
     # start training
     total_iter = 0
     best_acc1=0.
-    for epoch in range(args.decoupler_epochs):
-        print("lr:", lr_scheduler.get_last_lr(), decoupler_optimizer.param_groups[0]['lr'])
+    for epoch in range(args.train_epochs):
+        print("lr:", lr_scheduler.get_last_lr(), optimizer.param_groups[0]['lr'])
         # train for one epoch
-        train_decoupler(train_source_iter, val_iter, decoupler_model, decoupler_optimizer,
+        CasualOOD_train(train_source_iter, val_source_iter, model, optimizer,
               lr_scheduler, epoch, args, total_iter, backbone)
 
         # evaluate on validation set
-        acc1 = utils.validate_decoupler(val_loader, decoupler_model, args, device)
+        acc1 = utils.validate_decoupler(val_source_loader, model, args, device)
         print("acc1 = {:3.4f}".format(acc1))
-        wandb.log({"decoupler Val Acc": acc1})
-        message = '(epoch %d): decoupler Val Acc %.3f' % (epoch+1, acc1)
+        wandb.log({"Model Val Acc": acc1})
+        message = '(epoch %d): Model Val Acc %.3f' % (epoch+1, acc1)
         print(message)
         record = open(test_logger, 'a')
         record.write(message+'\n')
         record.close()
 
         # remember best acc@1 and save checkpoint
-        torch.save(decoupler_model.state_dict(), logger.get_checkpoint_path('latest_decoupler'))
+        torch.save(model.state_dict(), logger.get_checkpoint_path('latest_model'))
         if acc1 > best_acc1:
-            shutil.copy(logger.get_checkpoint_path('latest_decoupler'), logger.get_checkpoint_path('best_decoupler'))
+            shutil.copy(logger.get_checkpoint_path('latest_model'), logger.get_checkpoint_path('best_model_train'))
 
         best_acc1 = max(acc1, best_acc1)
 
     print("best_acc1 = {:3.4f}".format(best_acc1))
     # evaluate on test set
-    decoupler_model.load_state_dict(torch.load(logger.get_checkpoint_path('best_decoupler')))
-    acc1 = utils.validate_decoupler(test_loader, decoupler_model, args,device)
-    print("decoupler Best test_acc1 = {:3.2f}".format(acc1))
+    model.load_state_dict(torch.load(logger.get_checkpoint_path('best_model_train')))
+    acc1 = utils.validate_decoupler(test_loader, model, args,device)
+    print("Train Phase Best test_acc1 = {:3.2f}".format(acc1))
 
-    for param in decoupler_model.parameters():
-        param.requires_grad = False
 
-    best_acc2 = 0.
+    model.set_requires_grad(False)
+
+    # start test and finetune
     total_iter = 0
-    for epoch in range(args.unstable_epochs):
+    best_acc2=0.
+    for epoch in range(args.finetune_epochs):
+        print("lr:", finetune_lr_scheduler.get_last_lr(), finetune_optimizer.param_groups[0]['lr'])
+        # train for one epoch
+        CasualOOD_finetune(train_target_iter, val_target_iter, model, finetune_optimizer,
+                        lr_scheduler, epoch, args, total_iter, backbone)
 
-        # 训练不稳定特征模型
-        train_stable(train_source_iter, val_iter,decoupler_model, stable_classifier, stable_optimizer, stable_lr_scheduler, epoch, args, total_iter)
-
-
-        # 调用 validate_classifier 函数进行验证
-        acc2, _ = utils.validate_classifier(decoupler_model, stable_classifier, unstable_classifier, val_loader,
-                                                       args, device)
-
-        wandb.log({"Stable Classifier Val Acc": acc2})
-
-        message = '(epoch %d): Stable Classifier Val Acc %.3f' % (epoch + 1, acc2)
+        # evaluate on validation set
+        acc2 = combined_inference(model, val_target_loader, num_classes)
+        # acc2 = utils.validate_decoupler(val_target_loader, model, args, device)
+        print("acc2 = {:3.4f}".format(acc2))
+        wandb.log({"Model Val Acc": acc2})
+        message = '(epoch %d): Model Val Acc %.3f' % (epoch+1, acc2)
         print(message)
         record = open(test_logger, 'a')
-        record.write(message + '\n')
+        record.write(message+'\n')
         record.close()
 
         # remember best acc@1 and save checkpoint
-        torch.save(stable_classifier.state_dict(), logger.get_checkpoint_path('latest_stable'))
-
+        torch.save(model.state_dict(), logger.get_checkpoint_path('latest_model'))
         if acc2 > best_acc2:
-            shutil.copy(logger.get_checkpoint_path('latest_stable'), logger.get_checkpoint_path('best_stable'))
-        best_acc2= max(acc2, best_acc2)
+            shutil.copy(logger.get_checkpoint_path('latest_model'), logger.get_checkpoint_path('best_model_test'))
 
-        wandb.run.summary["best_stable_accuracy"] = best_acc2
+        best_acc2 = max(acc2, best_acc2)
 
-    print("best_acc2 = {:3.2f}".format(best_acc2))
+    print("best_acc2 = {:3.4f}".format(best_acc2))
+    # evaluate on test set
+    model.load_state_dict(torch.load(logger.get_checkpoint_path('best_model_test')))
+    acc2 = combined_inference(model, test_loader, num_classes)
+    # acc2 = utils.validate_decoupler(test_loader, model, args, device)
+    print("Test Phase Best test_acc = {:3.2f}".format(acc2))
 
-    # 加载最佳稳定模型并评估
-    stable_classifier.load_state_dict(torch.load(logger.get_checkpoint_path('best_stable')))
-    # 调用 validate_classifier 函数进行验证
-    acc2, _ = utils.validate_classifier(decoupler_model, stable_classifier, unstable_classifier, test_loader,
-                                        args, device)
-    print("Best Stable Classifier test_acc2 = {:3.2f}".format(acc2))
-
-    for param in stable_classifier.parameters():
-        param.requires_grad = False
-
-    best_acc3 = 0.
-    total_iter = 0
-    for epoch in range(args.unstable_epochs):
-
-        # 训练不稳定特征模型
-        train_unstable(train_source_iter, val_iter,decoupler_model, stable_classifier,unstable_classifier, unstable_optimizer, unstable_lr_scheduler, epoch, args, total_iter)
-
-
-        # 调用 validate_classifier 函数进行验证
-        _, acc3 = utils.validate_classifier(decoupler_model, stable_classifier, unstable_classifier, val_loader,
-                                                       args, device)
-
-        wandb.log({"Unstable Classifier Val Acc": acc3})
-
-        message = '(epoch %d): Unstable Classifier Val Acc %.3f' % (epoch + 1, acc3)
-        print(message)
-        record = open(test_logger, 'a')
-        record.write(message + '\n')
-        record.close()
-
-        # remember best acc@1 and save checkpoint
-        torch.save(unstable_classifier.state_dict(), logger.get_checkpoint_path('latest_unstable'))
-
-        if acc3 > best_acc3:
-            shutil.copy(logger.get_checkpoint_path('latest_unstable'), logger.get_checkpoint_path('best_unstable'))
-        best_acc3= max(acc3, best_acc3)
-
-        wandb.run.summary["best_accuracy"] = best_acc3
-
-    print("best_acc3 = {:3.2f}".format(best_acc3))
-
-    # 加载最佳稳定模型并评估
-    unstable_classifier.load_state_dict(torch.load(logger.get_checkpoint_path('best_unstable')))
-
-    # 调用 validate_classifier 函数进行验证
-    acc2,acc3 = utils.validate_classifier(decoupler_model, stable_classifier, unstable_classifier, test_loader,
-                                        args, device)
-    print("Final Best Stable Classifier test_acc2 = {:3.2f}".format(acc2))
-    print("Final Best Unstable Classifier test_acc3 = {:3.2f}".format(acc3))
-
-    for param in unstable_classifier.parameters():
-        param.requires_grad = False
-
-    # 评估组合模型
-
-    combined_acc= combined_inference(decoupler_model,stable_classifier, unstable_classifier, test_loader, num_classes)
-
-    # 分别打印准确率
-    print("Final Combined Model Test Acc = {:3.2f}".format(combined_acc))
 
     logger.close()
 
@@ -264,7 +229,7 @@ def main(args: argparse.Namespace):
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description='DANN for Unsupervised Domain Adaptation')
     # 数据集参数
-    parser.add_argument('--root', type=str, default='../../da_datasets/pacs-vae',
+    parser.add_argument('--root', type=str, default='../../da_datasets/pacs',
                         help='root path of dataset')   
     parser.add_argument('-d', '--data', metavar='DATA', default='PACS', choices=utils.get_dataset_names(),
                         help='dataset: ' + ' | '.join(utils.get_dataset_names()) +
@@ -360,6 +325,10 @@ if __name__ == '__main__':
                         help='number of unstable epochs to run')
     parser.add_argument('--decoupler_epochs', type=int, default=1, metavar='N',
                         help='number of decoupler epochs to run')
+    parser.add_argument('--train_epochs', type=int, default=1, metavar='N',
+                        help='number of train epochs to run')
+    parser.add_argument('--finetune_epochs', type=int, default=1, metavar='N',
+                        help='number of finetune epochs to run')
     parser.add_argument('--target_split_ratio', type=float, default=0.8, metavar='N',
                         help='ratio of target domain data used for training set (rest for testing)')
 

@@ -42,7 +42,7 @@ class Decoupler(nn.Module):
 
         # latent space dimensions
         self.z_dim = args.z_dim  # 总潜在空间的维度
-        self.s_dim = args.s_dim  # 虚假特征的维度
+        self.s_dim = args.z_dim  # 虚假特征的维度
         self.c_dim = self.z_dim - self.s_dim  # 不变特征的维度
 
         dim = args.hidden_dim
@@ -89,6 +89,7 @@ class Decoupler(nn.Module):
     def predict_unstable(self, z_s):
 
         return self.classifier_unstable(z_s)
+
 
 
     def forward(self, x):
@@ -141,6 +142,173 @@ class Decoupler(nn.Module):
             out = self.pool_layer(out)
         return out
 
+
+class CasualOOD(nn.Module):
+    def __init__(self, args, backbone_net=None):
+        super(CasualOOD, self).__init__()
+
+        self.args = args
+        self.backbone_net = backbone_net
+
+        # latent space dimensions
+        self.z_dim = args.z_dim  # 总潜在空间的维度
+        self.s_dim = args.z_dim  # 虚假特征的维度
+        self.c_dim = args.z_dim  # 不变特征的维度
+
+        dim = args.hidden_dim
+
+        # Define the backbone (feature extractor)
+        self.backbone_net = backbone_net
+
+        self.pool_layer = nn.Sequential(nn.AdaptiveAvgPool2d(output_size=(1, 1)), nn.Flatten())
+
+        # Define the encoder to map features to latent space
+        self.encoder = nn.Sequential(
+            nn.Linear(self.backbone_net.out_features, dim),  # 假设backbone的输出是out_features维度
+            nn.BatchNorm1d(dim),
+            nn.ReLU(),
+            nn.Dropout(),
+            nn.Linear(dim, self.z_dim)  # 潜在空间的维度是z_dim
+        )
+
+        # Projection layers for decoupling the features into invariant and spurious
+        self.projection_phi = nn.Linear(self.z_dim, self.c_dim)  # Project to invariant features
+        self.projection_psi = nn.Linear(self.z_dim, self.s_dim)  # Project to spurious features
+
+        # Classifiers for stable (content) and unstable (style) features
+        self.classifier_u = nn.Sequential(
+            nn.Linear(self.c_dim, dim),
+            nn.BatchNorm1d(dim),
+            nn.ReLU(),
+            nn.Dropout(),
+            nn.Linear(dim, args.num_classes)
+        )
+
+        self.classifier_s = nn.Sequential(
+            nn.Linear(self.s_dim, dim),
+            nn.BatchNorm1d(dim),
+            nn.ReLU(),
+            nn.Dropout(),
+            nn.Linear(dim, args.num_classes)
+        )
+
+        self.classifier_tilde_s = nn.Sequential(
+            nn.Linear(self.s_dim, dim),
+            nn.BatchNorm1d(dim),
+            nn.ReLU(),
+            nn.Dropout(),
+            nn.Linear(dim, args.num_classes)
+        )
+
+        self.classifier = nn.Sequential(
+            nn.Linear(self.z_dim, dim),
+            nn.BatchNorm1d(dim),
+            nn.ReLU(),
+            nn.Dropout(),
+            nn.Linear(dim, args.num_classes)
+        )
+
+        # GumbelSoftmaxLayer as a learnable network layer
+        self.temperature = nn.Parameter(torch.tensor(1.0))  # Start with a temperature of 1.0
+
+    def set_requires_grad(self, requires_grad):
+        """
+        在训练时启用所有层的梯度，测试时只启用temperature的梯度，其他层冻结。
+        """
+        for name, param in self.named_parameters():
+            if name == "temperature":  # 只对temperature层启用梯度
+                param.requires_grad = True
+            else:
+                param.requires_grad = requires_grad  # 其他层冻结
+
+    def backbone(self, x):
+        out = self.backbone_net(x)
+        if len(out.size()) > 2:
+            out = self.pool_layer(out)
+        return out
+
+    def predict_u(self, z_u):
+        u_logits = self.classifier_u(z_u)
+        return u_logits
+
+    def predict_s(self, z_s):
+        s_logits = self.classifier_s(z_s)
+        return s_logits
+
+    def predict_tilde_s(self, tilde_z_s):
+        tilde_s_logits = self.classifier_tilde_s(tilde_z_s)
+        return tilde_s_logits
+
+    def domain_influence(self, z_s, hard=False):
+        """
+        使用Gumbel-Softmax和学习到的温度调整spurious特征。
+        """
+        # Apply Gumbel-Softmax with learnable temperature
+        gumbel_softmax = F.gumbel_softmax(z_s, tau=self.temperature, hard=hard)
+
+        # The influence on the spurious features can be represented by the transformation of z_s
+        tilde_z_s = gumbel_softmax * z_s
+
+        return tilde_z_s
+
+    def forward(self, x):
+        z_u, z_s, u_logits, s_logits, tilde_s_logits = self.encode(x)
+        logits = u_logits + tilde_s_logits
+        return logits
+
+    def encode(self, x):
+        # Step 1: Extract features using the backbone
+        x_feat = self.backbone(x)  # The output of the backbone network
+
+        # Step 2: Project to the latent space
+        z = self.encoder(x_feat)
+
+        # Step 3: Apply projections to decouple into invariant and spurious features
+        z_u = self.projection_phi(z)  # Invariant features
+        z_s = self.projection_psi(z)  # Spurious features
+
+        # De-influence z_s using Gumbel-Softmax with a learnable temperature
+        tilde_z_s = self.domain_influence(z_s)  # Remove the domain influence; back to Gaussian
+
+        # Get logits
+        u_logits = self.predict_u(z_u)
+        s_logits = self.predict_s(z_s)
+        tilde_s_logits = self.predict_tilde_s(tilde_z_s)
+
+        return z_u, z_s, u_logits, s_logits, tilde_s_logits
+
+    def extract_feature(self, x):
+        """
+        提取特征并解耦为不变特征（z_u）和虚假特征（z_s）
+        """
+        # Step 1: Extract features using the backbone
+        x_feat = self.backbone(x)  # The output of the backbone network
+
+        # Step 2: Project to the latent space
+        z = self.encoder(x_feat)
+
+        # Step 3: Apply projections to decouple into invariant and spurious features
+        z_u = self.projection_phi(z)  # Invariant features
+        z_s = self.projection_psi(z)  # Spurious features
+
+        return z_u, z_s
+
+    def get_parameters(self, base_lr=1.0):
+        """返回优化器所需的参数列表，支持为不同模块设置不同的学习率"""
+
+        # Use itertools.chain() to combine parameters from different layers
+        base_params = itertools.chain(self.encoder.parameters(),
+                                      self.projection_phi.parameters(),
+                                      self.projection_psi.parameters(),
+                                      self.classifier.parameters())
+
+        params = [
+            {"params": self.backbone_net.parameters(), "lr": 0.1 * base_lr},  # backbone使用较小的学习率
+            {"params": base_params, "lr": 1.0 * base_lr},  # projection_phi, projection_psi, classifier使用默认学习率
+            {"params": self.temperature, "lr": 1.0 * base_lr}  # 只训练temperature
+        ]
+
+        return params
 
 
 

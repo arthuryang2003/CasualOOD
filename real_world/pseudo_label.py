@@ -6,14 +6,14 @@ import torch.nn.functional as F
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 
-def combined_inference(decoupler_model,stable_classifier, unstable_classifier, test_loader,num_classes):
+def combined_inference(model, test_loader,num_classes):
     # 初始化先验分布和混淆矩阵
     PY = torch.zeros(num_classes).to(device)  # 类别先验分布
     e_matrix = torch.zeros(num_classes, num_classes).to(device)  # 混淆矩阵
 
     # 计算混淆矩阵和先验分布
-    stable_classifier.eval()
-    unstable_classifier.eval()
+    model.eval()
+
     with torch.no_grad():
         for batch_idx, batch in enumerate(test_loader):
             # 解包数据，只取前两个（data 和 labels）
@@ -21,19 +21,18 @@ def combined_inference(decoupler_model,stable_classifier, unstable_classifier, t
             data = data.to(device)
             labels = labels.to(device)
             domains=domains.to(device)
+            one_hot_labels = F.one_hot(labels, num_classes)
 
             # decoupler model inference to decouple content and style
-            z_content,_=decoupler_model.extract_feature(data)
+            z_u,z_s,u_logits,s_logits,tilde_s_logits=model.encode(data)
 
-            # Stable model prediction using content (z_content)
-            stable_pred = stable_classifier(z_content)
 
-            stable_pred_softmax = F.softmax(stable_pred, dim=1)  # Softmax for multi-class classification
+
+            stable_pred_softmax = F.softmax(u_logits, dim=1)  # Softmax for multi-class classification
             stable_pred_hard = torch.argmax(stable_pred_softmax, dim=1)
 
-
             # 更新先验分布
-            PY += labels.sum(dim=0)
+            PY += one_hot_labels.sum(dim=0)
 
             # 计算混淆矩阵
             for i in range(len(labels)):  # 对每一个样本
@@ -42,12 +41,11 @@ def combined_inference(decoupler_model,stable_classifier, unstable_classifier, t
                 e_matrix[true_label, predicted_label] += 1
 
 
-
-
     # 归一化混淆矩阵和先验分布
-    e_matrix = e_matrix / e_matrix.sum(dim=0, keepdim=True)
-    # 打印混淆矩阵
-    print(f"Iteration {batch_idx + 1}, Confusion Matrix:\n{e_matrix}")
+
+    e_matrix = e_matrix / e_matrix.sum(dim=1, keepdim=True)
+    # # 打印混淆矩阵
+    # print(f"Iteration {batch_idx + 1}, Confusion Matrix:\n{e_matrix}")
 
     PY = PY / PY.sum()
 
@@ -64,16 +62,16 @@ def combined_inference(decoupler_model,stable_classifier, unstable_classifier, t
             domains=domains.to(device)
 
             # decoupler model inference to decouple content and style
-            z_content, z_style = decoupler_model.extract_feature(data)
+            z_u,z_s,u_logits,s_logits,tilde_s_logits=model.encode(data)
 
             # Stable model prediction using content (z_content)
-            stable_pred = stable_classifier(z_content)
-            stable_pred_softmax = F.softmax(stable_pred, dim=1)
+
+            stable_pred_softmax = F.softmax(u_logits, dim=1)
             stable_pred_hard = torch.argmax(stable_pred_softmax, dim=1)
 
             # Unstable model prediction using style (z_style)
-            unstable_pred = unstable_classifier(z_style)
-            unstable_pred_softmax = F.softmax(unstable_pred, dim=1)
+
+            unstable_pred_softmax = F.softmax(tilde_s_logits, dim=1)
 
             # Apply least squares correction to the unstable model's output
             unstable_pred_corrected = least_squares_correction(unstable_pred_softmax, e_matrix)
@@ -106,7 +104,7 @@ def least_squares_correction(Y_unstable, e_matrix):
     p = torch.ones_like(Y_unstable) / Y_unstable.size(1)  # 初始概率分布
 
     # 迭代优化
-    for i in range(10):
+    for i in range(1000):
         gradient = torch.matmul(e_matrix, p.T) - Y_unstable.T
         p = p - 0.01 * gradient.T  # 学习率 0.01
         p = F.softmax(p, dim=1)  # 确保 p 满足概率分布约束
