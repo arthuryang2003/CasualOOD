@@ -7,7 +7,7 @@ import shutil
 import os.path as osp
 import os
 
-from real_world.common.modules.networks import CasualOOD
+from common.modules.networks import CasualOOD
 
 sys.path.append('.')
 
@@ -174,13 +174,13 @@ def main(args: argparse.Namespace):
         # remember best acc@1 and save checkpoint
         torch.save(model.state_dict(), logger.get_checkpoint_path('latest_model'))
         if acc1 > best_acc1:
-            shutil.copy(logger.get_checkpoint_path('latest_model'), logger.get_checkpoint_path('best_model'))
+            shutil.copy(logger.get_checkpoint_path('latest_model'), logger.get_checkpoint_path('best_model_train'))
 
         best_acc1 = max(acc1, best_acc1)
 
     print("best_acc1 = {:3.4f}".format(best_acc1))
     # evaluate on test set
-    model.load_state_dict(torch.load(logger.get_checkpoint_path('best_model')))
+    model.load_state_dict(torch.load(logger.get_checkpoint_path('best_model_train')))
     acc1 = utils.validate_decoupler(test_loader, model, args,device)
     print("Train Phase Best test_acc1 = {:3.2f}".format(acc1))
 
@@ -197,7 +197,8 @@ def main(args: argparse.Namespace):
                         lr_scheduler, epoch, args, total_iter, backbone)
 
         # evaluate on validation set
-        acc2 =  combined_inference(model, val_target_loader, num_classes)
+        acc2 = combined_inference(model, val_target_loader, num_classes)
+        # acc2 = utils.validate_decoupler(val_target_loader, model, args, device)
         print("acc2 = {:3.4f}".format(acc2))
         wandb.log({"Model Val Acc": acc2})
         message = '(epoch %d): Model Val Acc %.3f' % (epoch+1, acc2)
@@ -209,14 +210,15 @@ def main(args: argparse.Namespace):
         # remember best acc@1 and save checkpoint
         torch.save(model.state_dict(), logger.get_checkpoint_path('latest_model'))
         if acc2 > best_acc2:
-            shutil.copy(logger.get_checkpoint_path('latest_model'), logger.get_checkpoint_path('best_model'))
+            shutil.copy(logger.get_checkpoint_path('latest_model'), logger.get_checkpoint_path('best_model_test'))
 
         best_acc2 = max(acc2, best_acc2)
 
     print("best_acc2 = {:3.4f}".format(best_acc2))
     # evaluate on test set
-    model.load_state_dict(torch.load(logger.get_checkpoint_path('best_model')))
+    model.load_state_dict(torch.load(logger.get_checkpoint_path('best_model_test')))
     acc2 = combined_inference(model, test_loader, num_classes)
+    # acc2 = utils.validate_decoupler(test_loader, model, args, device)
     print("Test Phase Best test_acc = {:3.2f}".format(acc2))
 
 
