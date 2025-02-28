@@ -33,7 +33,7 @@ from common.utils.logger import CompleteLogger
 from common.utils.analysis import collect_feature, tsne, a_distance
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-os.environ['WANDB_MODE'] = 'disabled'
+# os.environ['WANDB_MODE'] = 'disabled'
 
 def main(args: argparse.Namespace):
     logger = CompleteLogger(args.log, args.phase)
@@ -198,8 +198,9 @@ def main(args: argparse.Namespace):
 
         # evaluate on validation set
         acc2 = combined_inference(model, val_target_loader, num_classes)
-        # acc2 = utils.validate_decoupler(val_target_loader, model, args, device)
+        acc3 = utils.validate_decoupler(val_target_loader, model, args, device)
         print("acc2 = {:3.4f}".format(acc2))
+        print("acc3 = {:3.4f}".format(acc3))
         wandb.log({"Model Val Acc": acc2})
         message = '(epoch %d): Model Val Acc %.3f' % (epoch+1, acc2)
         print(message)
@@ -218,7 +219,8 @@ def main(args: argparse.Namespace):
     # evaluate on test set
     model.load_state_dict(torch.load(logger.get_checkpoint_path('best_model_test')))
     acc2 = combined_inference(model, test_loader, num_classes)
-    # acc2 = utils.validate_decoupler(test_loader, model, args, device)
+    acc3 = utils.validate_decoupler(test_loader, model, args, device)
+    print("acc3 = {:3.4f}".format(acc3))
     print("Test Phase Best test_acc = {:3.2f}".format(acc2))
 
 

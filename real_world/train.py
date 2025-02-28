@@ -298,8 +298,7 @@ def CasualOOD_finetune(train_target_iter: ForeverDataIterator, val_iter: Forever
 
             # 记录训练过程的指标
             wandb.log({
-                "Train Val Acc": cls_t_acc.item(),
-                "Train Acc": cls_acc.item(),
-                "Train Loss": loss.item(),
-                "Train Cls Loss": mean_cls_losses.item(),
+                "Finetune Val Acc": cls_t_acc.item(),
+                "Finetune Acc": cls_acc.item(),
+                "Finetune Loss": loss.item()
             })

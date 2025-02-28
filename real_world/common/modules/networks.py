@@ -300,7 +300,10 @@ class CasualOOD(nn.Module):
         base_params = itertools.chain(self.encoder.parameters(),
                                       self.projection_phi.parameters(),
                                       self.projection_psi.parameters(),
-                                      self.classifier.parameters())
+                                      self.classifier.parameters(),
+                                      self.classifier_u.parameters(),
+                                      self.classifier_s.parameters(),
+                                      self.classifier_tilde_s.parameters())
 
         params = [
             {"params": self.backbone_net.parameters(), "lr": 0.1 * base_lr},  # backbone使用较小的学习率
