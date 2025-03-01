@@ -498,6 +498,61 @@ def validate_decoupler(val_loader, model, args, device) -> float:
 
     return top1.avg
 
+def validate_CasualOOD(val_loader, model, args, device) -> float:
+    batch_time = AverageMeter('Time', ':6.3f')
+
+    stable_losses = AverageMeter('Loss', ':.4e')
+    combiled_losses = AverageMeter('Loss', ':.4e')
+    stable_top1 = AverageMeter('Acc@1', ':6.2f')
+    combined_top1 = AverageMeter('Acc@1', ':6.2f')
+    progress = ProgressMeter(
+        len(val_loader),
+        [batch_time, losses, top1],
+        prefix='Test: ')
+
+    # switch to evaluate mode
+    model.eval()
+    if args.per_class_eval:
+        confmat = ConfusionMatrix(len(args.class_names))
+    else:
+        confmat = None
+
+    with torch.no_grad():
+        end = time.time()
+        for i, data in enumerate(val_loader):
+            images = data[0]
+            target = data[1]
+            images = images.to(device)
+            target = target.to(device)
+
+            z_u, z_s, u_logits, s_logits, tilde_s_logits = model.encode(images)
+            stable_loss = F.cross_entropy(u_logits, target)
+            combined_logits=u_logits+tilde_s_logits
+            combined_loss = F.cross_entropy(combined_logits, target)
+
+
+            # measure accuracy and record loss
+            acc1, = accuracy(u_logits, target, topk=(1,))
+            acc2, = accuracy(combined_logits, target, topk=(1,))
+            if confmat:
+                confmat.update(target, combined_logits.argmax(1))
+            stable_loss.update(stable_loss.item(), images.size(0))
+            combined_loss.update(combined_loss.item(), images.size(0))
+            stable_top1.update(acc1.item(), images.size(0))
+            combined_top1.update(acc2.item(), images.size(0))
+
+            # measure elapsed time
+            batch_time.update(time.time() - end)
+            end = time.time()
+
+            if i % args.print_freq == 0:
+                progress.display(i)
+
+        if confmat:
+            print(confmat.format(args.class_names))
+
+    return top1.avg
+
 
 # def combined_inference(stable_model, unstable_model, test_loader,num_classes):
 #     # 初始化先验分布和混淆矩阵

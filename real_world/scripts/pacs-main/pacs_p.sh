@@ -1,4 +1,4 @@
-declare -a seed=(5)
+declare -a seed=(8)
 declare -a device=(0)
 
 for ((i=0;i<${#seed[@]};++i)); do
