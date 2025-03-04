@@ -90,7 +90,8 @@ def CasualOOD_train(train_source_iter: ForeverDataIterator, val_iter: ForeverDat
             loss_cls_s=F.cross_entropy(tilde_s_logits, label_dom)
 
             # 分类损失
-            loss_cls = loss_cls_u+loss_cls_s
+            # loss_cls = loss_cls_u+loss_cls_s
+            loss_cls=F.cross_entropy(logits, label_dom)
 
             # 计算解藕损失（互信息损失）
             # 计算不变特征和虚假特征之间的余弦相似度

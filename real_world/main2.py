@@ -222,8 +222,8 @@ def main(args: argparse.Namespace):
     model.load_state_dict(torch.load(logger.get_checkpoint_path('best_model_test')))
     acc2 = combined_inference(model, test_loader, num_classes)
     acc3 = utils.validate1(test_loader, model, args, device)
-    print("acc3 = {:3.4f}".format(acc3))
-    print("Test Phase Best test_acc = {:3.2f}".format(acc2))
+    print("acc2 = {:3.4f}".format(acc2))
+    print("Test Phase Best test_acc = {:3.2f}".format(acc3))
 
 
     logger.close()
