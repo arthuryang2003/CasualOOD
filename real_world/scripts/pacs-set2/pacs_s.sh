@@ -11,6 +11,6 @@ WANDB_MODE=online CUDA_VISIBLE_DEVICES=${device[0]} python ../../main2.py --root
 --train_batch_size=16 \
 --train_epochs=20 \
 --finetune_epochs=10 \
---decouple_alpha=1.0 --decouple_beta=10.0 \
+--decouple_alpha=1.0 --decouple_beta=1000.0 \
 --phase=train
 done
