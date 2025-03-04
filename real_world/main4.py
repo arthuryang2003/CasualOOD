@@ -22,7 +22,7 @@ import wandb
 
 from extract_features import extract_features
 from pseudo_label import combined_inference
-from train import  CasualOOD_train,CasualOOD_finetune
+from train import  CasualOOD_train,CasualOOD_finetune,CasualOOD_train1
 
 import utils
 from common.modules.networks import iVAE,Classifier,Decoupler
@@ -110,6 +110,7 @@ def main(args: argparse.Namespace):
 
 
     test_logger = '%s/test.txt' % (args.log)
+    print(test_logger)
 
     if args.phase != 'train':
 
@@ -158,12 +159,11 @@ def main(args: argparse.Namespace):
     for epoch in range(args.train_epochs):
         print("lr:", lr_scheduler.get_last_lr(), optimizer.param_groups[0]['lr'])
         # train for one epoch
-        CasualOOD_train(train_source_iter, val_source_iter, model, optimizer,
+        CasualOOD_train1(train_source_iter, val_source_iter, model, optimizer,
               lr_scheduler, epoch, args, total_iter, backbone)
 
         # evaluate on validation set
         acc1 = utils.validate1(val_source_loader, model, args, device)
-        # acc1 = utils.validate_decoupler(val_source_loader, model, args, device)
         print("acc1 = {:3.4f}".format(acc1))
         wandb.log({"Model Val Acc": acc1})
         message = '(epoch %d): Model Val Acc %.3f' % (epoch+1, acc1)
@@ -175,7 +175,7 @@ def main(args: argparse.Namespace):
         # remember best acc@1 and save checkpoint
         torch.save(model.state_dict(), logger.get_checkpoint_path('latest_model'))
         if acc1 > best_acc1:
-            shutil.copy(logger.get_checkpoint_path('latest_model'), logger.get_checkpoint_path('best_model_train'))
+            shutil.copy(logger.get_checkpoint_path('latest_model'), logger.get_checkpoint_path('best_model_train1'))
 
         best_acc1 = max(acc1, best_acc1)
 
@@ -183,9 +183,39 @@ def main(args: argparse.Namespace):
     # evaluate on test set
     model.load_state_dict(torch.load(logger.get_checkpoint_path('best_model_train')))
     acc1 = utils.validate1(test_loader, model, args,device)
-    print("Train Phase Best test_acc1 = {:3.2f}".format(acc1))
+    print("Train Phase 1 Best test_acc1 = {:3.2f}".format(acc1))
 
+    # start training
+    total_iter = 0
+    best_acc1=0.
+    for epoch in range(args.train_epochs):
+        print("lr:", lr_scheduler.get_last_lr(), optimizer.param_groups[0]['lr'])
+        # train for one epoch
+        CasualOOD_train1(train_source_iter, val_source_iter, model, optimizer,
+              lr_scheduler, epoch, args, total_iter, backbone)
 
+        # evaluate on validation set
+        acc1 = utils.validate_decoupler(val_source_loader, model, args, device)
+        print("acc1 = {:3.4f}".format(acc1))
+        wandb.log({"Model Val Acc": acc1})
+        message = '(epoch %d): Model Val Acc %.3f' % (epoch+1, acc1)
+        print(message)
+        record = open(test_logger, 'a')
+        record.write(message+'\n')
+        record.close()
+
+        # remember best acc@1 and save checkpoint
+        torch.save(model.state_dict(), logger.get_checkpoint_path('latest_model'))
+        if acc1 > best_acc1:
+            shutil.copy(logger.get_checkpoint_path('latest_model'), logger.get_checkpoint_path('best_model_train2'))
+
+        best_acc1 = max(acc1, best_acc1)
+
+    print("best_acc1 = {:3.4f}".format(best_acc1))
+    # evaluate on test set
+    model.load_state_dict(torch.load(logger.get_checkpoint_path('best_model_train2')))
+    acc1 = utils.validate_decoupler(test_loader, model, args,device)
+    print("Train Phase 1 Best test_acc1 = {:3.2f}".format(acc1))
 
     model.set_requires_grad(False)
 
@@ -200,7 +230,7 @@ def main(args: argparse.Namespace):
 
         # evaluate on validation set
         acc2 = combined_inference(model, val_target_loader, num_classes)
-        acc3 = utils.validate1(val_target_loader, model, args, device)
+        acc3 = utils.validate_decoupler(val_target_loader, model, args, device)
         print("acc2 = {:3.4f}".format(acc2))
         print("acc3 = {:3.4f}".format(acc3))
         wandb.log({"Model Val Acc": acc2})
@@ -212,16 +242,16 @@ def main(args: argparse.Namespace):
 
         # remember best acc@1 and save checkpoint
         torch.save(model.state_dict(), logger.get_checkpoint_path('latest_model'))
-        if acc3 > best_acc2:
+        if acc2 > best_acc2:
             shutil.copy(logger.get_checkpoint_path('latest_model'), logger.get_checkpoint_path('best_model_test'))
 
-        best_acc2 = max(acc3, best_acc2)
+        best_acc2 = max(acc2, best_acc2)
 
     print("best_acc2 = {:3.4f}".format(best_acc2))
     # evaluate on test set
     model.load_state_dict(torch.load(logger.get_checkpoint_path('best_model_test')))
     acc2 = combined_inference(model, test_loader, num_classes)
-    acc3 = utils.validate1(test_loader, model, args, device)
+    acc3 = utils.validate_decoupler(test_loader, model, args, device)
     print("acc3 = {:3.4f}".format(acc3))
     print("Test Phase Best test_acc = {:3.2f}".format(acc2))
 
