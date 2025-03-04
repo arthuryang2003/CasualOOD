@@ -210,10 +210,10 @@ def main(args: argparse.Namespace):
 
         # remember best acc@1 and save checkpoint
         torch.save(model.state_dict(), logger.get_checkpoint_path('latest_model'))
-        if acc3 > best_acc2:
+        if acc2 > best_acc2:
             shutil.copy(logger.get_checkpoint_path('latest_model'), logger.get_checkpoint_path('best_model_test'))
 
-        best_acc2 = max(acc3, best_acc2)
+        best_acc2 = max(acc2, best_acc2)
 
     print("best_acc2 = {:3.4f}".format(best_acc2))
     # evaluate on test set
