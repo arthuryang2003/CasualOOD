@@ -187,39 +187,6 @@ def main(args: argparse.Namespace):
     print("Train Phase 1 Best test_acc1 = {:3.2f}".format(acc1))
 
     model.set_requires_grad_phase2()
-    # start training
-    total_iter = 0
-    best_acc1=0.
-    for epoch in range(args.finetune_epochs):
-        print("lr:", lr_scheduler.get_last_lr(), optimizer.param_groups[0]['lr'])
-        # train for one epoch
-        CasualOOD_train2(train_source_iter, val_source_iter, model, optimizer,
-              lr_scheduler, epoch, args, total_iter, backbone)
-
-        # evaluate on validation set
-        acc1 = utils.validate_decoupler(val_source_loader, model, args, device)
-        print("phase 2 acc1 = {:3.4f}".format(acc1))
-        wandb.log({"Model phase 2 Val Acc": acc1})
-        message = '(epoch %d): Model phase 2 Val Acc %.3f' % (epoch+1, acc1)
-        print(message)
-        record = open(test_logger, 'a')
-        record.write(message+'\n')
-        record.close()
-
-        # remember best acc@1 and save checkpoint
-        torch.save(model.state_dict(), logger.get_checkpoint_path('latest_model'))
-        if acc1 > best_acc1:
-            shutil.copy(logger.get_checkpoint_path('latest_model'), logger.get_checkpoint_path('best_model_train2'))
-
-        best_acc1 = max(acc1, best_acc1)
-
-    print("best_acc1 = {:3.4f}".format(best_acc1))
-    # evaluate on test set
-    model.load_state_dict(torch.load(logger.get_checkpoint_path('best_model_train2')))
-    acc1 = utils.validate_decoupler(test_loader, model, args,device)
-    print("Train Phase 2 Best test_acc1 = {:3.2f}".format(acc1))
-
-    model.set_requires_grad(False)
 
     # start test and finetune
     total_iter = 0

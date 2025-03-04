@@ -221,6 +221,39 @@ class CasualOOD(nn.Module):
             else:
                 param.requires_grad = requires_grad  # 其他层冻结
 
+    def set_requires_grad_phase1(self):
+        """
+        第一阶段:
+        - 冻结 temperature 参数
+        - 冻结 classifier_tilde_s 中的所有参数
+        - 其他层保持可训练
+        """
+        for name, param in self.named_parameters():
+            if name == "temperature":
+                param.requires_grad = False
+            elif "classifier_tilde_s" in name:
+                param.requires_grad = False
+            else:
+                param.requires_grad = True
+
+    def set_requires_grad_phase2(self):
+        """
+        第二阶段:
+        - 启用 temperature 参数
+        - 启用 classifier_tilde_s 中的所有参数
+        - 其他层（如需要继续训练也可保持 True，如果希望第二阶段只训练这两部分，则可将其他层设为 False）
+        """
+        for name, param in self.named_parameters():
+            if name == "temperature":
+                param.requires_grad = True
+            elif "classifier_tilde_s" in name:
+                param.requires_grad = True
+            else:
+                # 根据你的需要决定是否冻结其他部分。例如想只训练这两部分:
+                # param.requires_grad = False
+                # 如果其他部分也要继续训练, 则:
+                param.requires_grad = True
+
     def backbone(self, x):
         out = self.backbone_net(x)
         if len(out.size()) > 2:
