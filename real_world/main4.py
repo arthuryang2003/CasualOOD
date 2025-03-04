@@ -182,7 +182,7 @@ def main(args: argparse.Namespace):
 
     print("best_acc1 = {:3.4f}".format(best_acc1))
     # evaluate on test set
-    model.load_state_dict(torch.load(logger.get_checkpoint_path('best_model_train')))
+    model.load_state_dict(torch.load(logger.get_checkpoint_path('best_model_train1')))
     acc1 = utils.validate1(test_loader, model, args,device)
     print("Train Phase 1 Best test_acc1 = {:3.2f}".format(acc1))
 
