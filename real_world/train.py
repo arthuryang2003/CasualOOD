@@ -371,7 +371,6 @@ def CasualOOD_finetune(train_target_iter: ForeverDataIterator, val_iter: Forever
 
         # 将图像和标签数据移至GPU
         img_train = img_train.to(device)
-        labels_train = labels_train.to(device)
         d_train = d_train.to(device)
 
         # 初始化各个损失项的列表
@@ -386,6 +385,11 @@ def CasualOOD_finetune(train_target_iter: ForeverDataIterator, val_iter: Forever
 
         # 只针对目标域进行训练
         index = d_train == args.n_domains - 1  # 目标域样本
+
+        # # 打印 encoder 的所有参数
+        # print("Encoder Parameters:")
+        # for name, param in model.encoder.named_parameters():
+        #     print(f"{name}: {param.data}")
 
         # 特征提取
         z_u, z_s, u_logits, s_logits, tilde_s_logits = model.encode(img_train)

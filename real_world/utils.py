@@ -593,6 +593,17 @@ def validate1(val_loader, model, args, device) -> float:
             end = time.time()
 
             if i % args.print_freq == 0:
+                # 打印 encoder 的所有参数
+                # 打印 encoder 的所有参数
+                # x=model.get_x(images)
+                # print("X")
+                # print(x)
+                # z=model.get_z(images)
+                # print("Z")
+                # print(z)
+                # print("Z_u,Z_s")
+                # print(z_u)
+                # print(z_s)
                 progress.display(i)
 
         if confmat:

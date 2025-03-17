@@ -100,11 +100,13 @@ def main(args: argparse.Namespace):
     print(optimizer.param_groups[0]['lr'], ' *** lr')
 
     # define finetune optimizer and lr scheduler
-    finetune_optimizer = SGD(model.get_parameters(),
-                    lr=args.lr, momentum=args.momentum, weight_decay=args.weight_decay, nesterov=True)
+    finetune_optimizer = SGD([{"params": model.temperature, "lr": args.lr}],
+                             lr=args.lr, momentum=args.momentum, weight_decay=args.weight_decay, nesterov=True)
 
     print(finetune_optimizer.param_groups[0]['lr'], ' *** lr')
-    finetune_lr_scheduler = LambdaLR(finetune_optimizer, lambda x:  args.lr * (1. + args.lr_gamma * float(x)) ** (-args.lr_decay))
+    finetune_lr_scheduler = LambdaLR(finetune_optimizer,
+                                     lambda x: args.lr * (1. + args.lr_gamma * float(x)) ** (-args.lr_decay))
+
     print(finetune_optimizer.param_groups[0]['lr'], ' *** lr')
 
 
@@ -194,17 +196,20 @@ def main(args: argparse.Namespace):
     best_acc2=0.
     for epoch in range(args.finetune_epochs):
         print("lr:", finetune_lr_scheduler.get_last_lr(), finetune_optimizer.param_groups[0]['lr'])
+
         # train for one epoch
         CasualOOD_finetune(train_target_iter, val_target_iter, model, finetune_optimizer,
-                        lr_scheduler, epoch, args, total_iter, backbone)
+                        finetune_lr_scheduler, epoch, args, total_iter, backbone)
 
         # evaluate on validation set
-        acc2 = combined_inference(model, val_target_loader, num_classes)
+        # acc2 = combined_inference(model, val_target_loader, num_classes)
+
         acc3 = utils.validate1(val_target_loader, model, args, device)
-        print("acc2 = {:3.4f}".format(acc2))
-        print("acc3 = {:3.4f}".format(acc3))
-        wandb.log({"Model Val Acc": acc2})
-        message = '(epoch %d): Model Val Acc %.3f' % (epoch+1, acc2)
+        # print("acc2 = {:3.4f}".format(acc2))
+
+        print("acc4 = {:3.4f}".format(acc3))
+        wandb.log({"Model Val Acc": acc3})
+        message = '(epoch %d): Model Val Acc %.3f' % (epoch+1, acc3)
         print(message)
         record = open(test_logger, 'a')
         record.write(message+'\n')
@@ -220,9 +225,9 @@ def main(args: argparse.Namespace):
     print("best_acc2 = {:3.4f}".format(best_acc2))
     # evaluate on test set
     model.load_state_dict(torch.load(logger.get_checkpoint_path('best_model_test')))
-    acc2 = combined_inference(model, test_loader, num_classes)
+    # acc2 = combined_inference(model, test_loader, num_classes)
     acc3 = utils.validate1(test_loader, model, args, device)
-    print("acc2 = {:3.4f}".format(acc2))
+    # print("acc2 = {:3.4f}".format(acc2))
     print("Test Phase Best test_acc = {:3.2f}".format(acc3))
 
 

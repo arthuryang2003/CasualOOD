@@ -8,7 +8,8 @@ device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 def combined_inference(model, test_loader,num_classes):
     # 初始化先验分布和混淆矩阵
-    PY = torch.zeros(num_classes).to(device)  # 类别先验分布
+    PY_raw = torch.zeros(num_classes).to(device)  # 未归一化的先验分布
+    model.eval()
     e_matrix = torch.zeros(num_classes, num_classes).to(device)  # 混淆矩阵
 
     # 计算混淆矩阵和先验分布
@@ -16,38 +17,27 @@ def combined_inference(model, test_loader,num_classes):
 
     with torch.no_grad():
         for batch_idx, batch in enumerate(test_loader):
-            # 解包数据，只取前两个（data 和 labels）
-            data, labels,domains = batch[:3]
+            data, _, _ = batch[:3]
             data = data.to(device)
-            labels = labels.to(device)
-            domains=domains.to(device)
-            one_hot_labels = F.one_hot(labels, num_classes)
 
-            # decoupler model inference to decouple content and style
+            # 通过稳定模型提取特征并预测
             z_u,z_s,u_logits,s_logits,tilde_s_logits=model.encode(data)
+            stable_pred = F.softmax(u_logits, dim=1)  # 计算概率分布
+
+            # 计算未归一化的先验分布
+            PY_raw += stable_pred.sum(dim=0)
 
 
 
             stable_pred_softmax = F.softmax(u_logits, dim=1)  # Softmax for multi-class classification
             stable_pred_hard = torch.argmax(stable_pred_softmax, dim=1)
 
-            # 更新先验分布
-            PY += one_hot_labels.sum(dim=0)
+    # 计算归一化的 P_Y
+    PY = PY_raw / PY_raw.sum()
 
-            # 计算混淆矩阵
-            for i in range(len(labels)):  # 对每一个样本
-                true_label = labels[i].item()  # 真实标签
-                predicted_label = stable_pred_hard[i].item()  # 预测标签
-                e_matrix[true_label, predicted_label] += 1
+    # 计算混淆矩阵 e = P_Y_raw^T * Normalize(P_Y)
+    e_matrix = PY_raw.unsqueeze(1) @ F.normalize(PY.unsqueeze(0), p=1, dim=1)
 
-
-    # 归一化混淆矩阵和先验分布
-
-    e_matrix = e_matrix / e_matrix.sum(dim=1, keepdim=True)
-    # # 打印混淆矩阵
-    # print(f"Iteration {batch_idx + 1}, Confusion Matrix:\n{e_matrix}")
-
-    PY = PY / PY.sum()
 
     # 第二遍：使用调整后的不稳定模型预测
     correct = 0

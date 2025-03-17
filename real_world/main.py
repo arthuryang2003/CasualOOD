@@ -100,12 +100,15 @@ def main(args: argparse.Namespace):
     print(optimizer.param_groups[0]['lr'], ' *** lr')
 
     # define finetune optimizer and lr scheduler
-    finetune_optimizer = SGD(model.get_parameters(),
-                    lr=args.lr, momentum=args.momentum, weight_decay=args.weight_decay, nesterov=True)
+    finetune_optimizer = SGD([{"params": model.temperature, "lr": args.lr}],
+                             lr=args.lr, momentum=args.momentum, weight_decay=args.weight_decay, nesterov=True)
 
     print(finetune_optimizer.param_groups[0]['lr'], ' *** lr')
-    finetune_lr_scheduler = LambdaLR(finetune_optimizer, lambda x:  args.lr * (1. + args.lr_gamma * float(x)) ** (-args.lr_decay))
+    finetune_lr_scheduler = LambdaLR(finetune_optimizer,
+                                     lambda x: args.lr * (1. + args.lr_gamma * float(x)) ** (-args.lr_decay))
+
     print(finetune_optimizer.param_groups[0]['lr'], ' *** lr')
+
 
 
 
@@ -123,10 +126,11 @@ def main(args: argparse.Namespace):
             print("lr:", finetune_lr_scheduler.get_last_lr(), finetune_optimizer.param_groups[0]['lr'])
             # train for one epoch
             CasualOOD_finetune(train_target_iter, val_target_iter, model, finetune_optimizer,
-                               lr_scheduler, epoch, args, total_iter, backbone)
+                               finetune_lr_scheduler, epoch, args, total_iter, backbone)
 
             # evaluate on validation set
-            acc2 = combined_inference(model, val_target_loader, num_classes)
+            # acc2 = combined_inference(model, val_target_loader, num_classes)
+            acc2 = utils.validate_decoupler(val_target_loader, model, args, device)
             print("acc2 = {:3.4f}".format(acc2))
             wandb.log({"Model Val Acc": acc2})
             message = '(epoch %d): Model Val Acc %.3f' % (epoch + 1, acc2)
@@ -183,7 +187,8 @@ def main(args: argparse.Namespace):
     model.load_state_dict(torch.load(logger.get_checkpoint_path('best_model_train')))
     acc1 = utils.validate_decoupler(test_loader, model, args,device)
     print("Train Phase Best test_acc1 = {:3.2f}".format(acc1))
-
+    acc3 = utils.validate1(test_loader, model, args, device)
+    print("base acc = {:3.4f}".format(acc3))
 
     model.set_requires_grad(False)
 
@@ -194,13 +199,13 @@ def main(args: argparse.Namespace):
         print("lr:", finetune_lr_scheduler.get_last_lr(), finetune_optimizer.param_groups[0]['lr'])
         # train for one epoch
         CasualOOD_finetune(train_target_iter, val_target_iter, model, finetune_optimizer,
-                        lr_scheduler, epoch, args, total_iter, backbone)
+                        finetune_lr_scheduler, epoch, args, total_iter, backbone)
 
         # evaluate on validation set
-        acc2 = combined_inference(model, val_target_loader, num_classes)
-        acc3 = utils.validate_decoupler(val_target_loader, model, args, device)
+        # acc2 = combined_inference(model, val_target_loader, num_classes)
+        acc2 = utils.validate_decoupler(val_target_loader, model, args, device)
         print("acc2 = {:3.4f}".format(acc2))
-        print("acc3 = {:3.4f}".format(acc3))
+
         wandb.log({"Model Val Acc": acc2})
         message = '(epoch %d): Model Val Acc %.3f' % (epoch+1, acc2)
         print(message)
@@ -218,10 +223,12 @@ def main(args: argparse.Namespace):
     print("best_acc2 = {:3.4f}".format(best_acc2))
     # evaluate on test set
     model.load_state_dict(torch.load(logger.get_checkpoint_path('best_model_test')))
-    acc2 = combined_inference(model, test_loader, num_classes)
-    acc3 = utils.validate_decoupler(test_loader, model, args, device)
-    print("acc3 = {:3.4f}".format(acc3))
+
+    acc2 = utils.validate_decoupler(test_loader, model, args, device)
+    acc3 = utils.validate1(test_loader, model, args, device)
+    print("base acc = {:3.4f}".format(acc3))
     print("Test Phase Best test_acc = {:3.2f}".format(acc2))
+
 
 
     logger.close()

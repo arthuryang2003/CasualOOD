@@ -100,13 +100,14 @@ def main(args: argparse.Namespace):
     print(optimizer.param_groups[0]['lr'], ' *** lr')
 
     # define finetune optimizer and lr scheduler
-    finetune_optimizer = SGD(model.get_parameters(),
-                    lr=args.lr, momentum=args.momentum, weight_decay=args.weight_decay, nesterov=True)
+    finetune_optimizer = SGD([{"params": model.temperature, "lr": args.lr}],
+                             lr=args.lr, momentum=args.momentum, weight_decay=args.weight_decay, nesterov=True)
 
     print(finetune_optimizer.param_groups[0]['lr'], ' *** lr')
-    finetune_lr_scheduler = LambdaLR(finetune_optimizer, lambda x:  args.lr * (1. + args.lr_gamma * float(x)) ** (-args.lr_decay))
-    print(finetune_optimizer.param_groups[0]['lr'], ' *** lr')
+    finetune_lr_scheduler = LambdaLR(finetune_optimizer,
+                                     lambda x: args.lr * (1. + args.lr_gamma * float(x)) ** (-args.lr_decay))
 
+    print(finetune_optimizer.param_groups[0]['lr'], ' *** lr')
 
 
     test_logger = '%s/test.txt' % (args.log)

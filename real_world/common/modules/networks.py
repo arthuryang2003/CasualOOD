@@ -221,6 +221,12 @@ class CasualOOD(nn.Module):
             else:
                 param.requires_grad = requires_grad  # 其他层冻结
 
+        for m in self.modules():
+            if isinstance(m, nn.BatchNorm1d):
+                m.track_running_stats = requires_grad
+            if isinstance(m, nn.BatchNorm2d):
+                m.track_running_stats = requires_grad
+
     def set_requires_grad_phase1(self):
         """
         第一阶段:
@@ -249,10 +255,14 @@ class CasualOOD(nn.Module):
             elif "classifier_tilde_s" in name:
                 param.requires_grad = True
             else:
-                # 根据你的需要决定是否冻结其他部分。例如想只训练这两部分:
-                # param.requires_grad = False
-                # 如果其他部分也要继续训练, 则:
-                param.requires_grad = True
+                param.requires_grad = False
+
+            for m in self.modules():
+                if isinstance(m, nn.BatchNorm1d) or isinstance(m, nn.BatchNorm2d):
+                    if "classifier_tilde_s" in m.__class__.__name__:
+                        m.track_running_stats = True
+                    else:
+                        m.track_running_stats = False
 
     def backbone(self, x):
         out = self.backbone_net(x)
@@ -309,6 +319,19 @@ class CasualOOD(nn.Module):
         tilde_s_logits = self.predict_tilde_s(tilde_z_s)
 
         return z_u, z_s, u_logits, s_logits, tilde_s_logits
+    def get_x(self, x):
+        # Step 1: Extract features using the backbone
+        x_feat = self.backbone(x)  # The output of the backbone network
+
+        return x_feat
+    def get_z(self, x):
+        # Step 1: Extract features using the backbone
+        x_feat = self.backbone(x)  # The output of the backbone network
+
+        # Step 2: Project to the latent space
+        z = self.encoder(x_feat)
+
+        return z
 
     def extract_feature(self, x):
         """
@@ -333,7 +356,6 @@ class CasualOOD(nn.Module):
         base_params = itertools.chain(self.encoder.parameters(),
                                       self.projection_phi.parameters(),
                                       self.projection_psi.parameters(),
-                                      self.classifier.parameters(),
                                       self.classifier_u.parameters(),
                                       self.classifier_s.parameters(),
                                       self.classifier_tilde_s.parameters())
@@ -346,6 +368,30 @@ class CasualOOD(nn.Module):
 
         return params
 
+    def get_parameters_train_phase2(self, base_lr=1.0):
+        """只训练 temperature 和 classifier_tilde_s，冻结其他参数"""
+
+        params = [
+            {"params": self.classifier_tilde_s.parameters(), "lr": 1.0 * base_lr},  # 训练 classifier_tilde_s
+            {"params": self.temperature, "lr": 1.0 * base_lr}  # 训练 temperature
+        ]
+
+        return params
+
+    def get_parameters_train_phase1(self, base_lr=1.0):
+        """只训练 temperature 和 classifier_tilde_s，冻结其他参数"""
+        # Use itertools.chain() to combine parameters from different layers
+        base_params = itertools.chain(self.encoder.parameters(),
+                                      self.projection_phi.parameters(),
+                                      self.projection_psi.parameters(),
+                                      self.classifier_u.parameters(),
+                                      self.classifier_s.parameters())
+        params = [
+            {"params": self.backbone_net.parameters(), "lr": 0.1 * base_lr},  # backbone使用较小的学习率
+            {"params": base_params, "lr": 1.0 * base_lr},  # projection_phi, projection_psi, classifier使用默认学习率
+        ]
+
+        return params
 
 
 class MLP(nn.Module):

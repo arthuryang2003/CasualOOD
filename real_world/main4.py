@@ -92,22 +92,30 @@ def main(args: argparse.Namespace):
 
     model=CasualOOD(args, backbone_net=backbone).to(device)
     # define optimizer and lr scheduler
-    optimizer = SGD(model.get_parameters(),
+    phase1_optimizer = SGD(model.get_parameters_train_phase1(),
                     lr=args.lr, momentum=args.momentum, weight_decay=args.weight_decay, nesterov=True)
 
-    print(optimizer.param_groups[0]['lr'], ' *** lr')
-    lr_scheduler = LambdaLR(optimizer, lambda x:  args.lr * (1. + args.lr_gamma * float(x)) ** (-args.lr_decay))
-    print(optimizer.param_groups[0]['lr'], ' *** lr')
+    print(phase1_optimizer.param_groups[0]['lr'], ' *** lr')
+    phase1_lr_scheduler = LambdaLR(phase1_optimizer, lambda x:  args.lr * (1. + args.lr_gamma * float(x)) ** (-args.lr_decay))
+    print(phase1_optimizer.param_groups[0]['lr'], ' *** lr')
+
+    # define optimizer and lr scheduler
+    phase2_optimizer = SGD(model.get_parameters_train_phase2(),
+                    lr=args.lr, momentum=args.momentum, weight_decay=args.weight_decay, nesterov=True)
+
+    print(phase2_optimizer.param_groups[0]['lr'], ' *** lr')
+    phase2_lr_scheduler = LambdaLR(phase2_optimizer, lambda x:  args.lr * (1. + args.lr_gamma * float(x)) ** (-args.lr_decay))
+    print(phase2_optimizer.param_groups[0]['lr'], ' *** lr')
 
     # define finetune optimizer and lr scheduler
-    finetune_optimizer = SGD(model.get_parameters(),
-                    lr=args.lr, momentum=args.momentum, weight_decay=args.weight_decay, nesterov=True)
+    finetune_optimizer = SGD([{"params": model.temperature, "lr": args.lr}],
+                             lr=args.lr, momentum=args.momentum, weight_decay=args.weight_decay, nesterov=True)
 
     print(finetune_optimizer.param_groups[0]['lr'], ' *** lr')
-    finetune_lr_scheduler = LambdaLR(finetune_optimizer, lambda x:  args.lr * (1. + args.lr_gamma * float(x)) ** (-args.lr_decay))
+    finetune_lr_scheduler = LambdaLR(finetune_optimizer,
+                                     lambda x: args.lr * (1. + args.lr_gamma * float(x)) ** (-args.lr_decay))
+
     print(finetune_optimizer.param_groups[0]['lr'], ' *** lr')
-
-
 
     test_logger = '%s/test.txt' % (args.log)
     print(test_logger)
@@ -124,7 +132,7 @@ def main(args: argparse.Namespace):
             print("lr:", finetune_lr_scheduler.get_last_lr(), finetune_optimizer.param_groups[0]['lr'])
             # train for one epoch
             CasualOOD_finetune(train_target_iter, val_target_iter, model, finetune_optimizer,
-                               lr_scheduler, epoch, args, total_iter, backbone)
+                               finetune_lr_scheduler, epoch, args, total_iter, backbone)
 
             # evaluate on validation set
             acc2 = combined_inference(model, val_target_loader, num_classes)
@@ -158,10 +166,10 @@ def main(args: argparse.Namespace):
     total_iter = 0
     best_acc1=0.
     for epoch in range(args.train_epochs):
-        print("lr:", lr_scheduler.get_last_lr(), optimizer.param_groups[0]['lr'])
+        print("lr:", phase1_lr_scheduler.get_last_lr(), phase1_optimizer.param_groups[0]['lr'])
         # train for one epoch
-        CasualOOD_train1(train_source_iter, val_source_iter, model, optimizer,
-              lr_scheduler, epoch, args, total_iter, backbone)
+        CasualOOD_train1(train_source_iter, val_source_iter, model, phase1_optimizer,
+              phase1_lr_scheduler, epoch, args, total_iter, backbone)
 
         # evaluate on validation set
         acc1 = utils.validate1(val_source_loader, model, args, device)
@@ -186,15 +194,18 @@ def main(args: argparse.Namespace):
     acc1 = utils.validate1(test_loader, model, args,device)
     print("Train Phase 1 Best test_acc1 = {:3.2f}".format(acc1))
 
+    acc3 = utils.validate1(test_loader, model, args, device)
+    print("base acc = {:3.4f}".format(acc3))
+
     model.set_requires_grad_phase2()
     # start training
     total_iter = 0
     best_acc1=0.
     for epoch in range(args.finetune_epochs):
-        print("lr:", lr_scheduler.get_last_lr(), optimizer.param_groups[0]['lr'])
+        print("lr:", phase2_lr_scheduler.get_last_lr(), phase2_optimizer.param_groups[0]['lr'])
         # train for one epoch
-        CasualOOD_train2(train_source_iter, val_source_iter, model, optimizer,
-              lr_scheduler, epoch, args, total_iter, backbone)
+        CasualOOD_train2(train_source_iter, val_source_iter, model, phase2_optimizer,
+              phase2_lr_scheduler, epoch, args, total_iter, backbone)
 
         # evaluate on validation set
         acc1 = utils.validate_decoupler(val_source_loader, model, args, device)
@@ -219,6 +230,9 @@ def main(args: argparse.Namespace):
     acc1 = utils.validate_decoupler(test_loader, model, args,device)
     print("Train Phase 2 Best test_acc1 = {:3.2f}".format(acc1))
 
+    acc3 = utils.validate1(test_loader, model, args, device)
+    print("base acc = {:3.4f}".format(acc3))
+
     model.set_requires_grad(False)
 
     # start test and finetune
@@ -228,7 +242,7 @@ def main(args: argparse.Namespace):
         print("lr:", finetune_lr_scheduler.get_last_lr(), finetune_optimizer.param_groups[0]['lr'])
         # train for one epoch
         CasualOOD_finetune(train_target_iter, val_target_iter, model, finetune_optimizer,
-                        lr_scheduler, epoch, args, total_iter, backbone)
+                        finetune_lr_scheduler, epoch, args, total_iter, backbone)
 
         # evaluate on validation set
         acc2 = combined_inference(model, val_target_loader, num_classes)
@@ -257,6 +271,8 @@ def main(args: argparse.Namespace):
     print("acc3 = {:3.4f}".format(acc3))
     print("Test Phase Best test_acc = {:3.2f}".format(acc2))
 
+    acc3 = utils.validate1(test_loader, model, args, device)
+    print("base acc = {:3.4f}".format(acc3))
 
     logger.close()
 

@@ -9,8 +9,8 @@ WANDB_MODE=disabled CUDA_VISIBLE_DEVICES=${device[0]} python ../../main.py --roo
 --z_dim=64 \
 -i=100 \
 --seed=${seed[i]} \
---train_epochs=1 \
---finetune_epochs=1 \
+--train_epochs=2 \
+--finetune_epochs=2 \
 --decouple_alpha=1.0 --decouple_beta=100.0 \
 --phase=train
 done

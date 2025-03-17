@@ -1,5 +1,5 @@
 declare -a seed=(8)
-declare -a device=(0)
+declare -a device=(4)
 
 for ((i=0;i<${#seed[@]};++i)); do
 WANDB_MODE=online CUDA_VISIBLE_DEVICES=${device[0]} python ../../main4.py --root=../../../../da_datasets/pacs --batch-size=48 \

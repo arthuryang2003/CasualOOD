@@ -1,8 +1,8 @@
 declare -a seed=(8)
-declare -a device=(0)
+declare -a device=(2)
 
 for ((i=0;i<${#seed[@]};++i)); do
-WANDB_MODE=online CUDA_VISIBLE_DEVICES=${device[0]} python ../../main2.py --root=../../../../da_datasets/pacs --batch-size=48 \
+WANDB_MODE=disabled CUDA_VISIBLE_DEVICES=${device[0]} python ../../main2.py --root=../../../../da_datasets/pacs --batch-size=48 \
 -d PACS -s C,S,A -t P -a resnet18 \
 --name=PACS_test_To_P \
 --z_dim=64 \
