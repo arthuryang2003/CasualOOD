@@ -1,4 +1,4 @@
-declare -a seed=(4)
+declare -a seed=(8)
 declare -a s_dim=(64)
 declare -a device=(0)
 
@@ -11,6 +11,6 @@ WANDB_MODE=disabled CUDA_VISIBLE_DEVICES=${device[0]} python ../../main.py --roo
 --seed=${seed[i]} \
 --train_epochs=2 \
 --finetune_epochs=2 \
---decouple_alpha=1.0 --decouple_beta=100.0 \
+--decouple_alpha=1.0 --decouple_beta=10.0 \
 --phase=train
 done

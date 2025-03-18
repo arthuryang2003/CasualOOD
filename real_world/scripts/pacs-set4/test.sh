@@ -10,7 +10,7 @@ WANDB_MODE=disabled CUDA_VISIBLE_DEVICES=${device[0]} python ../../main4.py --ro
 -i=100 \
 --seed=${seed[i]} \
 --train_epochs=1 \
---finetune_epochs=1 \
+--finetune_epochs=5 \
 --decouple_alpha=1.0 --decouple_beta=10.0 \
 --phase=train
 done

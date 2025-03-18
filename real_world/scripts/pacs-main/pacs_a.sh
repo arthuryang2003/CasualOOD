@@ -11,6 +11,6 @@ WANDB_MODE=disabled  CUDA_VISIBLE_DEVICES=${device[0]} python ../../main.py --ro
 --train_batch_size=16 \
 --train_epochs=20 \
 --finetune_epochs=10 \
---decouple_alpha=1.0 --decouple_beta=10.0 \
+--decouple_alpha=1.0 --decouple_beta=100.0 \
 --phase=train
 done
