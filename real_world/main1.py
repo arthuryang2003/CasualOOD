@@ -20,12 +20,12 @@ from torch.utils.data import DataLoader
 import torch.nn.functional as F
 import wandb
 
-from extract_features import extract_features
+
 from pseudo_label import combined_inference
 from train import  CasualOOD_train,CasualOOD_finetune,CasualOOD_train1
 
 import utils
-from common.modules.networks import iVAE,Classifier,Decoupler
+
 from common.utils.data import ForeverDataIterator
 from common.utils.metric import accuracy
 from common.utils.meter import AverageMeter, ProgressMeter

@@ -1,6 +1,6 @@
 import torch
-from extract_features import extract_features
 import torch.nn.functional as F
+from itertools import chain
 
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -14,20 +14,17 @@ def combined_inference(model, test_loader,num_classes):
 
     # 计算混淆矩阵和先验分布
     model.eval()
-
+    test_iter = chain(*test_loader)  # <-- 这里拼接
     with torch.no_grad():
-        for batch_idx, batch in enumerate(test_loader):
-            data, _, _ = batch[:3]
-            data = data.to(device)
+        for batch_idx, batch in enumerate(test_iter):
+            data = batch[0].to(device)
 
             # 通过稳定模型提取特征并预测
-            z_u,z_s,u_logits,s_logits,tilde_s_logits=model.encode(data)
+            z_u,z_s,u_logits,s_logits,tilde_s_logits,combined_logits=model.encode(data)
             stable_pred = F.softmax(u_logits, dim=1)  # 计算概率分布
 
             # 计算未归一化的先验分布
             PY_raw += stable_pred.sum(dim=0)
-
-
 
             stable_pred_softmax = F.softmax(u_logits, dim=1)  # Softmax for multi-class classification
             stable_pred_hard = torch.argmax(stable_pred_softmax, dim=1)
@@ -44,15 +41,12 @@ def combined_inference(model, test_loader,num_classes):
     total = 0
     OOD = 0
     with torch.no_grad():
-        for batch_idx, batch in enumerate(test_loader):
+        for batch_idx, batch in enumerate(test_iter):
             # 解包数据，只取前两个（data 和 labels）
-            data, labels,domains = batch[:3]
-            data = data.to(device)
-            labels = labels.to(device)
-            domains=domains.to(device)
-
+            data =batch[0].to(device)
+            labels = batch[1].to(device)
             # decoupler model inference to decouple content and style
-            z_u,z_s,u_logits,s_logits,tilde_s_logits=model.encode(data)
+            z_u,z_s,u_logits,s_logits,tilde_s_logits,combined_logits=model.encode(data)
 
             # Stable model prediction using content (z_content)
 

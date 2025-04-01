@@ -19,7 +19,8 @@ from common.vision.transforms import ResizeImage
 from common.utils.metric import accuracy, ConfusionMatrix
 from common.utils.meter import AverageMeter, ProgressMeter
 from torchvision.utils import save_image
-from extract_features import extract_features
+from itertools import chain
+
 
 def get_model_names():
     return sorted(
@@ -217,156 +218,156 @@ def get_dataset(dataset_name, root, source, target, train_source_transform, val_
     return train_source_dataset, train_target_dataset,val_source_dataset, val_target_dataset,test_dataset, num_classes, class_names
 
 
-def validate_classifier(decoupler_model, stable_classifier, unstable_classifier, val_loader, args, device):
-    # 定义统计指标
-    batch_time = AverageMeter('Time', ':6.3f')
-    stable_losses = AverageMeter('Loss', ':6.3f')
-    unstable_losses = AverageMeter('Loss', ':6.3f')
-    top1_stable = AverageMeter('Stable Acc@1', ':6.2f')
-    top1_unstable = AverageMeter('Unstable Acc@1', ':6.2f')
-    progress = ProgressMeter(
-        len(val_loader),
-        [batch_time, stable_losses,unstable_losses, top1_stable, top1_unstable],
-        prefix='Validation: ')
+# def validate_classifier(decoupler_model, stable_classifier, unstable_classifier, val_loader, args, device):
+#     # 定义统计指标
+#     batch_time = AverageMeter('Time', ':6.3f')
+#     stable_losses = AverageMeter('Loss', ':6.3f')
+#     unstable_losses = AverageMeter('Loss', ':6.3f')
+#     top1_stable = AverageMeter('Stable Acc@1', ':6.2f')
+#     top1_unstable = AverageMeter('Unstable Acc@1', ':6.2f')
+#     progress = ProgressMeter(
+#         len(val_loader),
+#         [batch_time, stable_losses,unstable_losses, top1_stable, top1_unstable],
+#         prefix='Validation: ')
+#
+#     # 切换到评估模式
+#     stable_classifier.eval()
+#     unstable_classifier.eval()
+#
+#     with torch.no_grad():
+#         end = time.time()
+#
+#         for i, data in enumerate(val_loader):
+#             images, target = data[0], data[1]
+#             images = images.to(device)
+#             target = target.to(device)
+#
+#             # 使用VAE模型提取特征
+#             content, style = decoupler_model.extract_feature(images)
+#
+#             # 使用稳定分类器进行预测
+#             stable_output = stable_classifier(content)
+#             stable_loss = F.cross_entropy(stable_output, target)
+#
+#             # 生成伪标签
+#             pseudo_labels = torch.argmax(stable_output, dim=1)
+#             pseudo_labels = pseudo_labels.to(device)
+#
+#             # 使用不稳定分类器进行预测
+#             unstable_output = unstable_classifier(style)
+#             unstable_loss = F.cross_entropy(unstable_output, pseudo_labels)
+#
+#             # 计算准确率
+#             stable_acc, = accuracy(stable_output, target, topk=(1,))
+#             unstable_acc, = accuracy(unstable_output, pseudo_labels, topk=(1,))
+#
+#             # 更新统计
+#             stable_losses.update(stable_loss.item(), images.size(0))
+#             unstable_losses.update(unstable_loss.item(), images.size(0))
+#             top1_stable.update(stable_acc.item(), images.size(0))
+#             top1_unstable.update(unstable_acc.item(), images.size(0))
+#
+#             # 计时
+#             batch_time.update(time.time() - end)
+#             end = time.time()
+#
+#             # if i % args.print_freq == 0:
+#             #     progress.display(i)
+#     progress.display(i)
+#     return top1_stable.avg, top1_unstable.avg
 
-    # 切换到评估模式
-    stable_classifier.eval()
-    unstable_classifier.eval()
-
-    with torch.no_grad():
-        end = time.time()
-
-        for i, data in enumerate(val_loader):
-            images, target = data[0], data[1]
-            images = images.to(device)
-            target = target.to(device)
-
-            # 使用VAE模型提取特征
-            content, style = decoupler_model.extract_feature(images)
-
-            # 使用稳定分类器进行预测
-            stable_output = stable_classifier(content)
-            stable_loss = F.cross_entropy(stable_output, target)
-
-            # 生成伪标签
-            pseudo_labels = torch.argmax(stable_output, dim=1)
-            pseudo_labels = pseudo_labels.to(device)
-
-            # 使用不稳定分类器进行预测
-            unstable_output = unstable_classifier(style)
-            unstable_loss = F.cross_entropy(unstable_output, pseudo_labels)
-
-            # 计算准确率
-            stable_acc, = accuracy(stable_output, target, topk=(1,))
-            unstable_acc, = accuracy(unstable_output, pseudo_labels, topk=(1,))
-
-            # 更新统计
-            stable_losses.update(stable_loss.item(), images.size(0))
-            unstable_losses.update(unstable_loss.item(), images.size(0))
-            top1_stable.update(stable_acc.item(), images.size(0))
-            top1_unstable.update(unstable_acc.item(), images.size(0))
-
-            # 计时
-            batch_time.update(time.time() - end)
-            end = time.time()
-
-            # if i % args.print_freq == 0:
-            #     progress.display(i)
-    progress.display(i)
-    return top1_stable.avg, top1_unstable.avg
-
-
-def validate_vae(val_loader, model, args, total_iter,device) -> float:
-    batch_time = AverageMeter('Time', ':6.3f')
-    losses_vae = AverageMeter('VAE', ':4.4f')
-    losses_cls = AverageMeter('Cls', ':4.4f')
-    losses_kl = AverageMeter('KL', ':4.4f')
-    losses_recon = AverageMeter('Rec', ':4.4f')
-    total_loss = AverageMeter('Loss', ':4.4f')
-
-    top1 = AverageMeter('Acc@1', ':6.2f')
-    progress = ProgressMeter(
-        len(val_loader),
-        [batch_time,losses_vae, losses_cls, losses_kl, losses_recon, total_loss, top1],
-        prefix='Test: ')
-
-    normal_distribution = torch.distributions.MultivariateNormal(torch.zeros(args.z_dim).cuda(),
-                                                                 torch.eye(args.z_dim).cuda())
-
-    # switch to evaluate mode
-    model.eval()
-    if args.per_class_eval:
-        confmat = ConfusionMatrix(len(args.class_names))
-    else:
-        confmat = None
-
-    with torch.no_grad():
-        end = time.time()
-        for i, data in enumerate(val_loader):
-            images = data[0]
-            target = data[1]
-            u=data[2]
-            images = images.to(device)
-            target = target.to(device)
-            u =u.to(device)
-
-            # Feature extraction
-            x = model.backbone(images)
-            z, tilde_z, mu, log_var, logdet_u, logit = model.encode(x, u=u)
-
-            # Classification loss
-            cls_loss = F.cross_entropy(logit, target)
-
-            # VAE KL loss
-            q_dist = torch.distributions.Normal(mu, torch.exp(torch.clamp(log_var, min=-10) / 2))
-            log_qz = q_dist.log_prob(z)
-            log_pz = normal_distribution.log_prob(tilde_z) + logdet_u
-            kl = (log_qz.sum(dim=1) - log_pz).mean()
-
-            # Smooth C value to adjust KL loss during training
-            C = torch.clamp(torch.tensor(args.C_max) / args.C_stop_iter * total_iter, 0, args.C_max)
-            loss_kl = args.beta * (kl - C).abs()  # KL loss
-
-            # Reconstruction loss
-            x_hat = model.decode(z)
-            recon_loss = F.mse_loss(x, x_hat, reduction='sum') / len(x)
-
-            # VAE loss (KL loss + reconstruction loss)
-            mean_loss_vae = recon_loss + loss_kl
-
-
-
-            # Total loss (Classification loss + VAE loss)
-            total_val_loss = cls_loss + args.lambda_vae * mean_loss_vae
-
-            # Update meters
-            losses_vae.update(mean_loss_vae.item(), images.size(0))
-            losses_cls.update(cls_loss.item(), images.size(0))
-            losses_kl.update(loss_kl.item(), images.size(0))
-            losses_recon.update(recon_loss.item(), images.size(0))
-            total_loss.update(total_val_loss.item(), images.size(0))
-
-            # Measure accuracy
-            acc1 = accuracy(logit, target)[0]
-            top1.update(acc1.item(), images.size(0))
-
-            # Confusion matrix update
-            if confmat:
-                confmat.update(target, logit.argmax(1))
-
-            # Measure elapsed time
-            batch_time.update(time.time() - end)
-            end = time.time()
-
-            # if i % args.print_freq == 0:
-            #     progress.display(i)
-
-        if confmat:
-            print(confmat.format(args.class_names))
-
-
-    progress.display(i)
-    return top1.avg, total_loss.avg
+#
+# def validate_vae(val_loader, model, args, total_iter,device) -> float:
+#     batch_time = AverageMeter('Time', ':6.3f')
+#     losses_vae = AverageMeter('VAE', ':4.4f')
+#     losses_cls = AverageMeter('Cls', ':4.4f')
+#     losses_kl = AverageMeter('KL', ':4.4f')
+#     losses_recon = AverageMeter('Rec', ':4.4f')
+#     total_loss = AverageMeter('Loss', ':4.4f')
+#
+#     top1 = AverageMeter('Acc@1', ':6.2f')
+#     progress = ProgressMeter(
+#         len(val_loader),
+#         [batch_time,losses_vae, losses_cls, losses_kl, losses_recon, total_loss, top1],
+#         prefix='Test: ')
+#
+#     normal_distribution = torch.distributions.MultivariateNormal(torch.zeros(args.z_dim).cuda(),
+#                                                                  torch.eye(args.z_dim).cuda())
+#
+#     # switch to evaluate mode
+#     model.eval()
+#     if args.per_class_eval:
+#         confmat = ConfusionMatrix(len(args.class_names))
+#     else:
+#         confmat = None
+#
+#     with torch.no_grad():
+#         end = time.time()
+#         for i, data in enumerate(val_loader):
+#             images = data[0]
+#             target = data[1]
+#             u=data[2]
+#             images = images.to(device)
+#             target = target.to(device)
+#             u =u.to(device)
+#
+#             # Feature extraction
+#             x = model.backbone(images)
+#             z, tilde_z, mu, log_var, logdet_u, logit = model.encode(x, u=u)
+#
+#             # Classification loss
+#             cls_loss = F.cross_entropy(logit, target)
+#
+#             # VAE KL loss
+#             q_dist = torch.distributions.Normal(mu, torch.exp(torch.clamp(log_var, min=-10) / 2))
+#             log_qz = q_dist.log_prob(z)
+#             log_pz = normal_distribution.log_prob(tilde_z) + logdet_u
+#             kl = (log_qz.sum(dim=1) - log_pz).mean()
+#
+#             # Smooth C value to adjust KL loss during training
+#             C = torch.clamp(torch.tensor(args.C_max) / args.C_stop_iter * total_iter, 0, args.C_max)
+#             loss_kl = args.beta * (kl - C).abs()  # KL loss
+#
+#             # Reconstruction loss
+#             x_hat = model.decode(z)
+#             recon_loss = F.mse_loss(x, x_hat, reduction='sum') / len(x)
+#
+#             # VAE loss (KL loss + reconstruction loss)
+#             mean_loss_vae = recon_loss + loss_kl
+#
+#
+#
+#             # Total loss (Classification loss + VAE loss)
+#             total_val_loss = cls_loss + args.lambda_vae * mean_loss_vae
+#
+#             # Update meters
+#             losses_vae.update(mean_loss_vae.item(), images.size(0))
+#             losses_cls.update(cls_loss.item(), images.size(0))
+#             losses_kl.update(loss_kl.item(), images.size(0))
+#             losses_recon.update(recon_loss.item(), images.size(0))
+#             total_loss.update(total_val_loss.item(), images.size(0))
+#
+#             # Measure accuracy
+#             acc1 = accuracy(logit, target)[0]
+#             top1.update(acc1.item(), images.size(0))
+#
+#             # Confusion matrix update
+#             if confmat:
+#                 confmat.update(target, logit.argmax(1))
+#
+#             # Measure elapsed time
+#             batch_time.update(time.time() - end)
+#             end = time.time()
+#
+#             # if i % args.print_freq == 0:
+#             #     progress.display(i)
+#
+#         if confmat:
+#             print(confmat.format(args.class_names))
+#
+#
+#     progress.display(i)
+#     return top1.avg, total_loss.avg
 
 
 def get_train_transform(resizing='default', random_horizontal_flip=True, random_color_jitter=False,
@@ -452,12 +453,13 @@ def str2bool(v):
     else:
         raise argparse.ArgumentTypeError('Boolean value expected.')
 
-def validate_decoupler(val_loader, model, args, device) -> float:
+def validate(val_loader, model, args, device) -> float:
     batch_time = AverageMeter('Time', ':6.3f')
     losses = AverageMeter('Loss', ':.4e')
     top1 = AverageMeter('Acc@1', ':6.2f')
+    total_len = sum(len(loader) for loader in val_loader)
     progress = ProgressMeter(
-        len(val_loader),
+        total_len,
         [batch_time, losses, top1],
         prefix='Test: ')
 
@@ -468,11 +470,13 @@ def validate_decoupler(val_loader, model, args, device) -> float:
     else:
         confmat = None
 
+    val_iter = chain(*val_loader)  # <-- 这里拼接
     with torch.no_grad():
         end = time.time()
-        for i, data in enumerate(val_loader):
-            images = data[0]
-            target = data[1]
+        for i, (images, target)  in enumerate(val_iter):
+
+            # images = torch.cat([b[0] for b in data], dim=0).to(device)
+            # target = torch.cat([b[1] for b in data], dim=0).to(device)
             images = images.to(device)
             target = target.to(device)
 
@@ -498,7 +502,8 @@ def validate_decoupler(val_loader, model, args, device) -> float:
 
     return top1.avg
 
-def validate_CasualOOD(val_loader, model, args, device) -> float:
+
+def validate_combined_logits(val_loader, model, args, device) -> float:
     batch_time = AverageMeter('Time', ':6.3f')
 
     stable_losses = AverageMeter('Loss', ':.4e')
@@ -520,16 +525,13 @@ def validate_CasualOOD(val_loader, model, args, device) -> float:
     with torch.no_grad():
         end = time.time()
         for i, data in enumerate(val_loader):
-            images = data[0]
-            target = data[1]
-            images = images.to(device)
-            target = target.to(device)
+            images = torch.cat([b[0] for b in data], dim=0).to(device)
+            target = torch.cat([b[1] for b in data], dim=0).to(device)
 
             z_u, z_s, u_logits, s_logits, tilde_s_logits = model.encode(images)
             stable_loss = F.cross_entropy(u_logits, target)
             combined_logits=u_logits+tilde_s_logits
             combined_loss = F.cross_entropy(combined_logits, target)
-
 
             # measure accuracy and record loss
             acc1, = accuracy(u_logits, target, topk=(1,))
@@ -553,12 +555,13 @@ def validate_CasualOOD(val_loader, model, args, device) -> float:
 
     return combined_top1.avg
 
-def validate1(val_loader, model, args, device) -> float:
+def validate_ulogits(val_loader, model, args, device) -> float:
     batch_time = AverageMeter('Time', ':6.3f')
     losses = AverageMeter('Loss', ':.4e')
     top1 = AverageMeter('Acc@1', ':6.2f')
+    total_len = sum(len(loader) for loader in val_loader)
     progress = ProgressMeter(
-        len(val_loader),
+        total_len,
         [batch_time, losses, top1],
         prefix='Test: ')
 
@@ -569,11 +572,13 @@ def validate1(val_loader, model, args, device) -> float:
     else:
         confmat = None
 
+    val_iter = chain(*val_loader)  # <-- 这里拼接
     with torch.no_grad():
         end = time.time()
-        for i, data in enumerate(val_loader):
-            images = data[0]
-            target = data[1]
+        for i, (images, target)  in enumerate(val_iter):
+
+            # images = torch.cat([b[0] for b in data], dim=0).to(device)
+            # target = torch.cat([b[1] for b in data], dim=0).to(device)
             images = images.to(device)
             target = target.to(device)
 
@@ -593,17 +598,6 @@ def validate1(val_loader, model, args, device) -> float:
             end = time.time()
 
             if i % args.print_freq == 0:
-                # 打印 encoder 的所有参数
-                # 打印 encoder 的所有参数
-                # x=model.get_x(images)
-                # print("X")
-                # print(x)
-                # z=model.get_z(images)
-                # print("Z")
-                # print(z)
-                # print("Z_u,Z_s")
-                # print(z_u)
-                # print(z_s)
                 progress.display(i)
 
         if confmat:
