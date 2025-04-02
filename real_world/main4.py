@@ -34,7 +34,7 @@ from common.utils.analysis import collect_feature, tsne, a_distance
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 # os.environ['WANDB_MODE'] = 'disabled'
-
+#两阶段
 def main(args: argparse.Namespace):
     logger = CompleteLogger(args.log, args.phase)
     print(args)

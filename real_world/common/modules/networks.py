@@ -22,9 +22,6 @@ class CasualOOD(nn.Module):
 
         dim = args.hidden_dim
 
-        # Define the backbone (feature extractor)
-        self.backbone_net = backbone_net
-
         self.pool_layer = nn.Sequential(nn.AdaptiveAvgPool2d(output_size=(1, 1)), nn.Flatten())
 
         # Define the encoder to map features to latent space
@@ -169,7 +166,8 @@ class CasualOOD(nn.Module):
 
     def forward(self, x):
         z_u, z_s, u_logits, s_logits, tilde_s_logits,combined_logits = self.encode(x)
-        logits = combined_logits
+        # logits = combined_logits
+        logits=u_logits+tilde_s_logits
         return logits
 
     def encode(self, x):
@@ -189,13 +187,13 @@ class CasualOOD(nn.Module):
         # 合并 zu 和 tilde_zs
         tilde_z = torch.cat([z_u, tilde_z_s], dim=1)
 
-        # combined_logits = self.classifier_combined(tilde_z)
+        combined_logits = self.classifier_combined(tilde_z)
 
         # Get logits
         u_logits = self.predict_u(z_u)
         s_logits = self.predict_s(z_s)
         tilde_s_logits = self.predict_tilde_s(tilde_z_s)
-        combined_logits = u_logits+tilde_s_logits
+        # combined_logits = u_logits+tilde_s_logits
         return z_u, z_s, u_logits, s_logits, tilde_s_logits,combined_logits
 
 

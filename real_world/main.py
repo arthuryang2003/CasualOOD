@@ -167,38 +167,7 @@ def main(args: argparse.Namespace):
         model.load_state_dict(torch.load(logger.get_checkpoint_path('best_model.pth')))
 
     if args.phase == 'test':
-        # # start test and finetune
-        # total_iter = 0
-        # best_acc2 = 0.
-        # for epoch in range(args.finetune_epochs):
-        #     print("lr:", finetune_lr_scheduler.get_last_lr(), finetune_optimizer.param_groups[0]['lr'])
-        #     # train for one epoch
-        #     CasualOOD_finetune(train_target_iter, val_target_iter, model, finetune_optimizer,
-        #                        lr_scheduler, epoch, args, total_iter, backbone)
-        #
-        #     # evaluate on validation set
-        #     acc2 = combined_inference(model, val_target_loader, num_classes)
-        #     print("acc2 = {:3.4f}".format(acc2))
-        #     wandb.log({"Model Val Acc": acc2})
-        #     message = '(epoch %d): Model Val Acc %.3f' % (epoch + 1, acc2)
-        #     print(message)
-        #     record = open(test_logger, 'a')
-        #     record.write(message + '\n')
-        #     record.close()
-        #
-        #     # remember best acc@1 and save checkpoint
-        #     torch.save(model.state_dict(), logger.get_checkpoint_path('latest_model'))
-        #     if acc2 > best_acc2:
-        #         shutil.copy(logger.get_checkpoint_path('latest_model'), logger.get_checkpoint_path('best_model'))
-        #
-        #     best_acc2 = max(acc2, best_acc2)
-        #
-        # print("best_acc2 = {:3.4f}".format(best_acc2))
-        # # evaluate on test set
-        # model.load_state_dict(torch.load(logger.get_checkpoint_path('best_model')))
-        # acc2 = combined_inference(model, test_loader, num_classes)
-        # print("Test Phase Best test_acc = {:3.2f}".format(acc2))
-
+        # start test and finetune
         return
 
 
@@ -287,14 +256,14 @@ def main(args: argparse.Namespace):
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description='CasualOOD')
     # 数据集参数
-    parser.add_argument('--root', type=str, default='../../da_datasets/pacs',
-                        help='root path of dataset')   
-    parser.add_argument('-d', '--data', metavar='DATA', default='PACS', choices=utils.get_dataset_names(),
-                        help='dataset: ' + ' | '.join(utils.get_dataset_names()) +
-                             ' (default: PACS)')
-    parser.add_argument('--dataset', type=str, default="PACS")
+    # parser.add_argument('--root', type=str, default='../../da_datasets/pacs',
+    #                     help='root path of dataset')
+    # parser.add_argument('-d', '--data', metavar='DATA', default='PACS', choices=utils.get_dataset_names(),
+    #                     help='dataset: ' + ' | '.join(utils.get_dataset_names()) +
+    #                          ' (default: PACS)')
+
+    parser.add_argument('--dataset', type=str, default="ColoredMNIST")
     parser.add_argument('--data_dir', type=str,default='./data')
-    parser.add_argument('--test_envs', type=int, nargs='+', default=[0])
 
     parser.add_argument('-s', '--source', help='source domain(s)', default='C,P,A')
     parser.add_argument('-t', '--target', help='target domain(s)', default='S')
@@ -363,7 +332,7 @@ if __name__ == '__main__':
     # parser.add_argument('--c_dim', type=int, default=32, metavar='N')
     parser.add_argument('--train_batch_size', default=16, type=int)
     parser.add_argument('--s_dim', type=int, default=32, metavar='N')
-    parser.add_argument('--hidden_dim', type=int, default=4096, metavar='N')
+    parser.add_argument('--hidden_dim', type=int, default=256, metavar='N')
     parser.add_argument('--name', type=str, default='test', metavar='N')
 
     parser.add_argument('--decouple_alpha', type=float, default=1., metavar='N')
@@ -380,18 +349,15 @@ if __name__ == '__main__':
                         help='ratio of target domain data used for training set (rest for testing)')
 
     args = parser.parse_args()
-    model_id = f"{args.data}_{args.target}/{args.name}"
+    model_id = f"{args.dataset}_{args.target}/{args.name}"
     args.log = os.path.join(args.log, model_id)
 
     args.source = [i for i in args.source.split(',')]
     args.target = [i for i in args.target.split(',')]
     args.n_domains = len(args.source) + len(args.target)
-    args.input_dim = 2048
-    if 'pacs-vae' in args.root:
-        args.input_dim = 512
-        args.hidden_dim = 256
+
     args.norm_id = args.n_domains - 1
-    args.c_dim = args.z_dim - args.s_dim
+    # args.c_dim = args.z_dim - args.s_dim
 
     wandb.init(
         project="CasualOOD",

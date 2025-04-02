@@ -73,8 +73,8 @@ def CasualOOD_train(train_source_iter: ForeverDataIterator, val_iter: ForeverDat
         # 各类损失项
         loss_cls_u = F.cross_entropy(u_logits, labels_train)
         loss_cls_s = F.cross_entropy(tilde_s_logits, labels_train)
-        # loss_cls = F.cross_entropy(logits, labels_train)
-        loss_cls =loss_cls_u+loss_cls_s
+        loss_cls = F.cross_entropy(logits, labels_train)
+        # loss_cls =loss_cls_u+loss_cls_s
 
         # 解耦损失（互信息近似）
         sim = F.cosine_similarity(z_u, z_s, dim=1)
@@ -273,7 +273,7 @@ def CasualOOD_train1(train_source_iter: ForeverDataIterator, val_iter: ForeverDa
 
         # 特征提取
         z_u, z_s, u_logits, s_logits, tilde_s_logits,combined_logits = model.encode(img_train)
-        logits = u_logits + tilde_s_logits
+        logits = u_logits
 
         # 各类损失项
         loss_cls_u = F.cross_entropy(u_logits, labels_train)
@@ -388,7 +388,7 @@ def CasualOOD_train2(train_source_iter: ForeverDataIterator, val_iter: ForeverDa
 
         # 特征提取
         z_u, z_s, u_logits, s_logits, tilde_s_logits,combined_logits = model.encode(img_train)
-        logits = u_logits + tilde_s_logits
+        logits =  tilde_s_logits
 
         # 各类损失项
         loss_cls_u = F.cross_entropy(u_logits, labels_train)
