@@ -31,7 +31,7 @@ from train import  CasualOOD_train,CasualOOD_finetune
 
 import utils
 
-from common.utils.data import ForeverDataIterator
+from utils import ForeverDataIterator
 from common.utils.metric import accuracy
 from common.utils.meter import AverageMeter, ProgressMeter
 from common.utils.logger import CompleteLogger
@@ -129,10 +129,10 @@ def main(args: argparse.Namespace):
         num_workers=args.workers
     )for i, env in enumerate(test_dataset)]
 
-    train_source_iter = zip(*train_source_loader)
-    val_source_iter = zip(*val_source_loader)
-    val_target_iter = zip(*val_target_loader)
-    train_target_iter = zip(*train_target_loader)
+    train_source_iter = ForeverDataIterator(train_source_loader)
+    val_source_iter = ForeverDataIterator(val_source_loader)
+    val_target_iter = ForeverDataIterator(val_target_loader)
+    train_target_iter = ForeverDataIterator(train_target_loader)
 
     args.num_classes=dataset.num_classes
     # 通过目标数据集计算类别数量
@@ -151,7 +151,7 @@ def main(args: argparse.Namespace):
     print(optimizer.param_groups[0]['lr'], ' *** lr')
 
     # define finetune optimizer and lr scheduler
-    finetune_optimizer = SGD(model.get_parameters(),
+    finetune_optimizer = SGD(model.get_finetune_parameters(),
                     lr=args.lr, momentum=args.momentum, weight_decay=args.weight_decay, nesterov=True)
 
     print(finetune_optimizer.param_groups[0]['lr'], ' *** lr')
@@ -232,6 +232,9 @@ def main(args: argparse.Namespace):
     print("best_acc1 = {:3.4f}".format(best_acc1))
     # evaluate on test set
     model.load_state_dict(torch.load(logger.get_checkpoint_path('best_model_train')))
+    acc3 = utils.validate_ulogits(test_loader, model, args, device)
+    print("base acc = {:3.4f}".format(acc3))
+
     acc1 = utils.validate(test_loader, model, args,device)
     print("Train Phase Best test_acc1 = {:3.2f}".format(acc1))
 
@@ -248,8 +251,8 @@ def main(args: argparse.Namespace):
                         lr_scheduler, epoch, args, total_iter, backbone)
 
         # evaluate on validation set
-        acc2 = combined_inference(model, val_target_loader, num_classes)
-        acc3 = utils.validate(val_target_loader, model, args, device)
+        acc3 = combined_inference(model, val_target_loader, num_classes)
+        acc2 = utils.validate(val_target_loader, model, args, device)
         print("acc2 = {:3.4f}".format(acc2))
         print("acc3 = {:3.4f}".format(acc3))
         wandb.log({"Model Val Acc": acc2})
@@ -269,8 +272,10 @@ def main(args: argparse.Namespace):
     print("best_acc2 = {:3.4f}".format(best_acc2))
     # evaluate on test set
     model.load_state_dict(torch.load(logger.get_checkpoint_path('best_model_test')))
-    acc2 = combined_inference(model, test_loader, num_classes)
-    acc3 = utils.validate(test_loader, model, args, device)
+    acc3 = utils.validate_ulogits(test_loader, model, args, device)
+    print("base acc = {:3.4f}".format(acc3))
+    acc3 = combined_inference(model, test_loader, num_classes)
+    acc2 = utils.validate(test_loader, model, args, device)
     print("acc3 = {:3.4f}".format(acc3))
     print("Test Phase Best test_acc = {:3.2f}".format(acc2))
 
@@ -336,7 +341,7 @@ if __name__ == '__main__':
                         help='number of data loading workers (default: 2)')
     parser.add_argument('--epochs', default=2, type=int, metavar='N',
                         help='number of total epochs to run')
-    parser.add_argument('-i', '--iters-per-epoch', default=1, type=int,
+    parser.add_argument('-i', '--iters-per-epoch', default=100, type=int,
                         help='Number of iterations per epoch')
     parser.add_argument('-p', '--print-freq', default=100, type=int,
                         metavar='N', help='print frequency (default: 100)')

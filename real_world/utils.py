@@ -21,6 +21,18 @@ from common.utils.meter import AverageMeter, ProgressMeter
 from torchvision.utils import save_image
 from itertools import chain
 
+class ForeverDataIterator:
+    def __init__(self, data_loader):
+        self.data_loader = data_loader
+        self.iterator = zip(*data_loader)
+
+    def __next__(self):
+        try:
+            data = next(self.iterator)
+        except StopIteration:
+            self.iterator = zip(*self.data_loader)
+            data = next(self.iterator)
+        return data
 
 def get_model_names():
     return sorted(
@@ -505,13 +517,13 @@ def validate(val_loader, model, args, device) -> float:
 
 def validate_combined_logits(val_loader, model, args, device) -> float:
     batch_time = AverageMeter('Time', ':6.3f')
-
+    total_len = sum(len(loader) for loader in val_loader)
     stable_losses = AverageMeter('Loss', ':.4e')
     combined_losses = AverageMeter('CombLoss', ':.4e')
     stable_top1 = AverageMeter('Acc@1', ':6.2f')
     combined_top1 = AverageMeter('CombAcc@1', ':6.2f')
     progress = ProgressMeter(
-        len(val_loader),
+        total_len,
         [batch_time, stable_losses,stable_top1,combined_losses, combined_top1],
         prefix='Test: ')
 
@@ -528,7 +540,7 @@ def validate_combined_logits(val_loader, model, args, device) -> float:
             images = torch.cat([b[0] for b in data], dim=0).to(device)
             target = torch.cat([b[1] for b in data], dim=0).to(device)
 
-            z_u, z_s, u_logits, s_logits, tilde_s_logits = model.encode(images)
+            z_u, z_s, u_logits, s_logits, tilde_s_logits,combined_logits = model.encode(images)
             stable_loss = F.cross_entropy(u_logits, target)
             combined_logits=u_logits+tilde_s_logits
             combined_loss = F.cross_entropy(combined_logits, target)
@@ -582,7 +594,7 @@ def validate_ulogits(val_loader, model, args, device) -> float:
             images = images.to(device)
             target = target.to(device)
 
-            z_u, z_s, u_logits, s_logits, tilde_s_logits = model.encode(images)
+            z_u, z_s, u_logits, s_logits, tilde_s_logits,combined_logits = model.encode(images)
             output=u_logits
             loss = F.cross_entropy(output, target)
 

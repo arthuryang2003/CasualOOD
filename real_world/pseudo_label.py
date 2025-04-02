@@ -35,7 +35,7 @@ def combined_inference(model, test_loader,num_classes):
     # 计算混淆矩阵 e = P_Y_raw^T * Normalize(P_Y)
     e_matrix = PY_raw.unsqueeze(1) @ F.normalize(PY.unsqueeze(0), p=1, dim=1)
 
-
+    test_iter = chain(*test_loader)  # <-- 这里拼接
     # 第二遍：使用调整后的不稳定模型预测
     correct = 0
     total = 0

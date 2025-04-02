@@ -36,9 +36,17 @@ class CasualOOD(nn.Module):
             nn.Linear(dim, self.z_dim)  # 潜在空间的维度是z_dim
         )
 
-        # Projection layers for decoupling the features into invariant and spurious
-        self.projection_phi = nn.Linear(self.z_dim, self.c_dim)  # Project to invariant features
-        self.projection_psi = nn.Linear(self.z_dim, self.s_dim)  # Project to spurious features
+        self.projection_phi = nn.Sequential(
+            nn.Linear(self.z_dim, self.c_dim),
+            nn.BatchNorm1d(self.c_dim),
+            nn.ReLU()
+        )  # Invariant features
+
+        self.projection_psi = nn.Sequential(
+            nn.Linear(self.z_dim, self.s_dim),
+            nn.BatchNorm1d(self.s_dim),
+            nn.ReLU()
+        )  # Spurious features
 
         # Classifiers for stable (content) and unstable (style) features
         self.classifier_u = nn.Sequential(
@@ -181,14 +189,13 @@ class CasualOOD(nn.Module):
         # 合并 zu 和 tilde_zs
         tilde_z = torch.cat([z_u, tilde_z_s], dim=1)
 
-        combined_logits = self.classifier_combined(tilde_z)
+        # combined_logits = self.classifier_combined(tilde_z)
+
         # Get logits
         u_logits = self.predict_u(z_u)
         s_logits = self.predict_s(z_s)
         tilde_s_logits = self.predict_tilde_s(tilde_z_s)
-
-
-
+        combined_logits = u_logits+tilde_s_logits
         return z_u, z_s, u_logits, s_logits, tilde_s_logits,combined_logits
 
 
@@ -206,6 +213,22 @@ class CasualOOD(nn.Module):
 
         params = [
             {"params": self.backbone_net.parameters(), "lr": 0.1 * base_lr},  # backbone使用较小的学习率
+            {"params": base_params, "lr": 1.0 * base_lr},  # projection_phi, projection_psi, classifier使用默认学习率
+            {"params": self.mask, "lr": 1.0 * base_lr}  # 只训练temperature
+        ]
+
+        return params
+
+
+    def get_finetune_parameters(self, base_lr=1.0):
+        """返回优化器所需的参数列表，支持为不同模块设置不同的学习率"""
+
+        # Use itertools.chain() to combine parameters from different layers
+        base_params = itertools.chain(
+                                      self.classifier_combined.parameters(),
+                                      self.classifier_tilde_s.parameters())
+
+        params = [
             {"params": base_params, "lr": 1.0 * base_lr},  # projection_phi, projection_psi, classifier使用默认学习率
             {"params": self.mask, "lr": 1.0 * base_lr}  # 只训练temperature
         ]
