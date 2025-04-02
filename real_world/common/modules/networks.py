@@ -119,9 +119,11 @@ class CasualOOD(nn.Module):
         - 其他层（如需要继续训练也可保持 True，如果希望第二阶段只训练这两部分，则可将其他层设为 False）
         """
         for name, param in self.named_parameters():
-            if name == "temperature":
+            if name == "mask":
                 param.requires_grad = True
             elif "classifier_tilde_s" in name:
+                param.requires_grad = True
+            elif "classifier_combined" in name:
                 param.requires_grad = True
             else:
                 param.requires_grad = False
@@ -129,6 +131,8 @@ class CasualOOD(nn.Module):
             for m in self.modules():
                 if isinstance(m, nn.BatchNorm1d) or isinstance(m, nn.BatchNorm2d):
                     if "classifier_tilde_s" in m.__class__.__name__:
+                        m.track_running_stats = True
+                    elif "classifier_combined" in m.__class__.__name__:
                         m.track_running_stats = True
                     else:
                         m.track_running_stats = False
@@ -237,7 +241,7 @@ class CasualOOD(nn.Module):
         """只训练 temperature 和 classifier_tilde_s，冻结其他参数"""
 
         params = [
-            {"params": self.classifier_combined.parameters(), "lr": 1.0 * base_lr},  # 训练 classifier_tilde_s
+            {"params": self.classifier_combined.parameters(), "lr": 1.0 * base_lr},  # 训练
             {"params": self.classifier_tilde_s.parameters(), "lr": 1.0 * base_lr},  # 训练 classifier_tilde_s
             {"params": self.mask, "lr": 1.0 * base_lr}  # 训练 temperature
         ]

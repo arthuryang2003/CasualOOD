@@ -388,7 +388,7 @@ def CasualOOD_train2(train_source_iter: ForeverDataIterator, val_iter: ForeverDa
 
         # 特征提取
         z_u, z_s, u_logits, s_logits, tilde_s_logits,combined_logits = model.encode(img_train)
-        logits =  tilde_s_logits
+        logits =  combined_logits
 
         # 各类损失项
         loss_cls_u = F.cross_entropy(u_logits, labels_train)
