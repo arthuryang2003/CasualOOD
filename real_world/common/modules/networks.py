@@ -166,8 +166,8 @@ class CasualOOD(nn.Module):
 
     def forward(self, x):
         z_u, z_s, u_logits, s_logits, tilde_s_logits,combined_logits = self.encode(x)
-        # logits = combined_logits
-        logits=u_logits+tilde_s_logits
+        logits = combined_logits
+        # logits=u_logits+tilde_s_logits
         return logits
 
     def encode(self, x):
