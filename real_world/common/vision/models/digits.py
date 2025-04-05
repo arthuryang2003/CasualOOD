@@ -6,7 +6,7 @@ import torch.nn as nn
 
 
 class LeNet(nn.Sequential):
-    def __init__(self, num_classes=10):
+    def __init__(self, num_classes=2):
         super(LeNet, self).__init__(
             nn.Conv2d(2, 20, kernel_size=5),
             nn.MaxPool2d(2),

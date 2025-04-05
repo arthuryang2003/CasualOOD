@@ -22,12 +22,11 @@ def combined_inference(model, test_loader,num_classes):
             # 通过稳定模型提取特征并预测
             z_u,z_s,u_logits,s_logits,tilde_s_logits,combined_logits=model.encode(data)
             stable_pred = F.softmax(u_logits, dim=1)  # 计算概率分布
+            stable_pred_hard = torch.argmax(stable_pred, dim=1)
 
             # 计算未归一化的先验分布
-            PY_raw += stable_pred.sum(dim=0)
+            PY_raw += stable_pred_hard.sum(dim=0)
 
-            stable_pred_softmax = F.softmax(u_logits, dim=1)  # Softmax for multi-class classification
-            stable_pred_hard = torch.argmax(stable_pred_softmax, dim=1)
 
     # 计算归一化的 P_Y
     PY = PY_raw / PY_raw.sum()

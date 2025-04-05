@@ -160,12 +160,48 @@ def main(args: argparse.Namespace):
     test_logger = '%s/test.txt' % (args.log)
     print(test_logger)
 
-    if args.phase != 'train':
-
-        model.load_state_dict(torch.load(logger.get_checkpoint_path('best_model.pth')))
-
     if args.phase == 'test':
+        model.set_requires_grad(False)
         # start test and finetune
+        total_iter = 0
+        best_acc2 = 0.
+        for epoch in range(args.finetune_epochs):
+            print("lr:", finetune_lr_scheduler.get_last_lr(), finetune_optimizer.param_groups[0]['lr'])
+            # train for one epoch
+            CasualOOD_finetune(train_target_iter, val_target_iter, model, finetune_optimizer,
+                               finetune_lr_scheduler, epoch, args, total_iter, backbone)
+
+            # evaluate on validation set
+            acc3 = combined_inference(model, val_target_loader, num_classes)
+            acc2 = utils.validate(val_target_loader, model, args, device)
+            print("acc2 = {:3.4f}".format(acc2))
+            print("acc3 = {:3.4f}".format(acc3))
+            wandb.log({"Model Val Acc": acc2})
+            message = '(epoch %d): Model Val Acc %.3f' % (epoch + 1, acc2)
+            print(message)
+            record = open(test_logger, 'a')
+            record.write(message + '\n')
+            record.close()
+
+            # remember best acc@1 and save checkpoint
+            torch.save(model.state_dict(), logger.get_checkpoint_path('latest_model'))
+            if acc2 > best_acc2:
+                shutil.copy(logger.get_checkpoint_path('latest_model'), logger.get_checkpoint_path('best_model_test'))
+
+            best_acc2 = max(acc2, best_acc2)
+
+        print("best_acc2 = {:3.4f}".format(best_acc2))
+        # evaluate on test set
+        model.load_state_dict(torch.load(logger.get_checkpoint_path('best_model_test')))
+        acc3 = combined_inference(model, test_loader, num_classes)
+        acc2 = utils.validate(test_loader, model, args, device)
+        print("acc3 = {:3.4f}".format(acc3))
+        print("Test Phase Best test_acc = {:3.2f}".format(acc2))
+
+        acc3 = utils.validate_ulogits(test_loader, model, args, device)
+        print("base acc = {:3.4f}".format(acc3))
+
+        logger.close()
 
         return
 
