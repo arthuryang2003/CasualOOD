@@ -441,3 +441,135 @@ def CasualOOD_train2(train_source_iter: ForeverDataIterator, val_iter: ForeverDa
                 "Train Phase 2 Cls Loss": loss_cls.item(),
             })
 
+
+def ERM_train(train_source_iter: ForeverDataIterator, val_iter: ForeverDataIterator,
+              model, optimizer: torch.optim.Optimizer,
+              lr_scheduler: torch.optim.lr_scheduler.LambdaLR,
+              epoch: int, args: argparse.Namespace, total_iter: int):
+
+    batch_time = AverageMeter('Time', ':5.2f')
+    data_time = AverageMeter('Data', ':5.2f')
+    losses = AverageMeter('Loss', ':4.2f')
+    accs = AverageMeter('Acc', ':3.2f')
+    val_accs = AverageMeter('Val Acc', ':3.2f')
+
+    progress = ProgressMeter(
+        args.iters_per_epoch,
+        [batch_time, data_time, losses, accs, val_accs],
+        prefix="ERM Epoch: [{}]".format(epoch)
+    )
+
+    model.train()
+    end = time.time()
+
+    for i in range(args.iters_per_epoch):
+        total_iter += 1
+        model.train()
+        data_time.update(time.time() - end)
+
+        minibatches = next(train_source_iter)
+        x = torch.cat([d[0] for d in minibatches]).to(device)
+        y = torch.cat([d[1] for d in minibatches]).to(device)
+
+        logits = model(x)
+        loss = F.cross_entropy(logits, y)
+
+        optimizer.zero_grad()
+        loss.backward()
+        optimizer.step()
+        lr_scheduler.step()
+
+        acc = accuracy(logits, y)[0]
+        losses.update(loss.item(), x.size(0))
+        accs.update(acc.item(), x.size(0))
+        batch_time.update(time.time() - end)
+        end = time.time()
+
+        if i % args.print_freq == 0:
+            model.eval()
+            val_minibatches = next(val_iter)
+            x_val = torch.cat([d[0] for d in val_minibatches]).to(device)
+            y_val = torch.cat([d[1] for d in val_minibatches]).to(device)
+
+            with torch.no_grad():
+                val_logits = model(x_val)
+                val_acc = accuracy(val_logits, y_val)[0]
+                val_accs.update(val_acc.item(), x_val.size(0))
+
+            model.train()
+            progress.display(i)
+
+            wandb.log({
+                "ERM Train Loss": loss.item(),
+                "ERM Train Acc": acc.item(),
+                "ERM Val Acc": val_acc.item()
+            })
+
+
+def IRM_train(train_source_iter: ForeverDataIterator, val_iter: ForeverDataIterator,
+              model, optimizer: torch.optim.Optimizer,
+              lr_scheduler: torch.optim.lr_scheduler.LambdaLR,
+              epoch: int, args: argparse.Namespace, total_iter: int):
+
+    batch_time = AverageMeter('Time', ':5.2f')
+    data_time = AverageMeter('Data', ':5.2f')
+    losses = AverageMeter('Loss', ':4.2f')
+    accs = AverageMeter('Acc', ':3.2f')
+    penalties = AverageMeter('Penalty', ':4.2f')
+    val_accs = AverageMeter('Val Acc', ':3.2f')
+
+    progress = ProgressMeter(
+        args.iters_per_epoch,
+        [batch_time, data_time, losses, penalties, accs, val_accs],
+        prefix="IRM Epoch: [{}]".format(epoch)
+    )
+
+    model.train()
+    end = time.time()
+
+    for i in range(args.iters_per_epoch):
+        total_iter += 1
+        model.train()
+        data_time.update(time.time() - end)
+
+        minibatches = next(train_source_iter)
+        loss, nll, penalty = model.get_penalized_loss(minibatches)
+
+        optimizer.zero_grad()
+        loss.backward()
+        optimizer.step()
+        lr_scheduler.step()
+
+        model.update_count += 1
+
+        x = torch.cat([d[0] for d in minibatches]).to(device)
+        y = torch.cat([d[1] for d in minibatches]).to(device)
+        logits = model(x)
+        acc = accuracy(logits, y)[0]
+
+        losses.update(loss.item(), x.size(0))
+        accs.update(acc.item(), x.size(0))
+        penalties.update(penalty, x.size(0))
+        batch_time.update(time.time() - end)
+        end = time.time()
+
+        if i % args.print_freq == 0:
+            model.eval()
+            val_minibatches = next(val_iter)
+            x_val = torch.cat([d[0] for d in val_minibatches]).to(device)
+            y_val = torch.cat([d[1] for d in val_minibatches]).to(device)
+
+            with torch.no_grad():
+                val_logits = model(x_val)
+                val_acc = accuracy(val_logits, y_val)[0]
+                val_accs.update(val_acc.item(), x_val.size(0))
+
+            model.train()
+            progress.display(i)
+
+            wandb.log({
+                "IRM Train Loss": loss.item(),
+                "IRM Train Acc": acc.item(),
+                "IRM Penalty": penalty,
+                "IRM Val Acc": val_acc.item()
+            })

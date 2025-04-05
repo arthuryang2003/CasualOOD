@@ -5,7 +5,7 @@ from torch.autograd import Variable
 from torch.nn import Parameter
 import numpy as np
 import itertools
-
+from torch import autograd
 
 
 class CasualOOD(nn.Module):
@@ -262,3 +262,78 @@ class CasualOOD(nn.Module):
         ]
 
         return params
+
+
+
+class ERMNet(nn.Module):
+    def __init__(self, args, backbone_net=None):
+        super(ERMNet, self).__init__()
+        self.args = args
+        self.backbone_net = backbone_net
+
+        dim = args.hidden_dim
+        self.pool_layer = nn.Sequential(nn.AdaptiveAvgPool2d((1, 1)), nn.Flatten())
+
+        self.classifier = nn.Sequential(
+            nn.Linear(self.backbone_net.out_features, dim),
+            nn.BatchNorm1d(dim),
+            nn.ReLU(),
+            nn.Dropout(),
+            nn.Linear(dim, args.num_classes)
+        )
+
+    def forward(self, x):
+        feat = self.backbone(x)
+        out = self.classifier(feat)
+        return out
+
+    def backbone(self, x):
+        out = self.backbone_net(x)
+        if len(out.size()) > 2:
+            out = self.pool_layer(out)
+        return out
+
+    def predict(self, x):
+        return self.forward(x)
+
+    def get_parameters(self, base_lr=1.0):
+        return [
+            {"params": self.backbone_net.parameters(), "lr": 0.1 * base_lr},
+            {"params": self.classifier.parameters(), "lr": 1.0 * base_lr}
+        ]
+
+class IRMNet(ERMNet):
+    def __init__(self, args, backbone_net=None):
+        super(IRMNet, self).__init__(args, backbone_net)
+        self.update_count = 0
+
+    def irm_penalty(self, logits, y):
+        device = logits.device
+        scale = torch.tensor(1.).to(device).requires_grad_()
+        loss_1 = F.cross_entropy(logits[::2] * scale, y[::2])
+        loss_2 = F.cross_entropy(logits[1::2] * scale, y[1::2])
+        grad_1 = autograd.grad(loss_1, [scale], create_graph=True)[0]
+        grad_2 = autograd.grad(loss_2, [scale], create_graph=True)[0]
+        return torch.sum(grad_1 * grad_2)
+
+    def get_penalized_loss(self, minibatches):
+        all_x = torch.cat([x for x, y in minibatches])
+        all_y = torch.cat([y for x, y in minibatches])
+        all_logits = self.forward(all_x)
+
+        penalty = 0.
+        nll = 0.
+        start = 0
+        for x, y in minibatches:
+            end = start + x.size(0)
+            logits = all_logits[start:end]
+            start = end
+            nll += F.cross_entropy(logits, y)
+            penalty += self.irm_penalty(logits, y)
+        nll /= len(minibatches)
+        penalty /= len(minibatches)
+
+        penalty_weight = self.args.irm_lambda if self.update_count >= self.args.irm_anneal_iters else 1.0
+        total_loss = nll + penalty_weight * penalty
+
+        return total_loss, nll.item(), penalty.item()
