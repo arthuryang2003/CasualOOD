@@ -275,6 +275,57 @@ def validate_ulogits(val_loader, model, args, device) -> float:
 
     return top1.avg
 
+def validate_slogits(val_loader, model, args, device) -> float:
+    batch_time = AverageMeter('Time', ':6.3f')
+    losses = AverageMeter('Loss', ':.4e')
+    top1 = AverageMeter('Acc@1', ':6.2f')
+    total_len = sum(len(loader) for loader in val_loader)
+    progress = ProgressMeter(
+        total_len,
+        [batch_time, losses, top1],
+        prefix='Test: ')
+
+    # switch to evaluate mode
+    model.eval()
+    if args.per_class_eval:
+        confmat = ConfusionMatrix(len(args.class_names))
+    else:
+        confmat = None
+
+    val_iter = chain(*val_loader)  # <-- 这里拼接
+    with torch.no_grad():
+        end = time.time()
+        for i, (images, target)  in enumerate(val_iter):
+
+            # images = torch.cat([b[0] for b in data], dim=0).to(device)
+            # target = torch.cat([b[1] for b in data], dim=0).to(device)
+            images = images.to(device)
+            target = target.to(device)
+
+            z_u, z_s, u_logits, s_logits, tilde_s_logits,combined_logits = model.encode(images)
+
+            output=tilde_s_logits
+            pseudo_labels = torch.argmax(F.softmax(u_logits), dim=1)
+            loss = F.cross_entropy(output, pseudo_labels)
+
+            # measure accuracy and record loss
+            acc1, = accuracy(output, pseudo_labels, topk=(1,))
+            if confmat:
+                confmat.update(pseudo_labels, output.argmax(1))
+            losses.update(loss.item(), images.size(0))
+            top1.update(acc1.item(), images.size(0))
+
+            # measure elapsed time
+            batch_time.update(time.time() - end)
+            end = time.time()
+
+            if i % args.print_freq == 0:
+                progress.display(i)
+
+        if confmat:
+            print(confmat.format(args.class_names))
+
+    return top1.avg
 
 # def combined_inference(stable_model, unstable_model, test_loader,num_classes):
 #     # 初始化先验分布和混淆矩阵

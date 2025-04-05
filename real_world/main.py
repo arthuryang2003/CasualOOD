@@ -164,10 +164,48 @@ def main(args: argparse.Namespace):
 
     if args.phase != 'train':
 
-        model.load_state_dict(torch.load(logger.get_checkpoint_path('best_model.pth')))
+        model.load_state_dict(torch.load(logger.get_checkpoint_path('best_model_train')))
 
     if args.phase == 'test':
         # start test and finetune
+        total_iter = 0
+        best_acc2 = 0.
+        for epoch in range(args.finetune_epochs):
+            print("lr:", finetune_lr_scheduler.get_last_lr(), finetune_optimizer.param_groups[0]['lr'])
+            # train for one epoch
+            CasualOOD_finetune(train_target_iter, val_target_iter, model, finetune_optimizer,
+                               lr_scheduler, epoch, args, total_iter, backbone)
+
+            # evaluate on validation set
+            acc3 = combined_inference(model, val_target_loader, num_classes)
+            acc2 = utils.validate(val_target_loader, model, args, device)
+            print("acc2 = {:3.4f}".format(acc2))
+            print("acc3 = {:3.4f}".format(acc3))
+            wandb.log({"Model Val Acc": acc2})
+            message = '(epoch %d): Model Val Acc %.3f' % (epoch + 1, acc2)
+            print(message)
+            record = open(test_logger, 'a')
+            record.write(message + '\n')
+            record.close()
+
+            # remember best acc@1 and save checkpoint
+            torch.save(model.state_dict(), logger.get_checkpoint_path('latest_model'))
+            if acc2 > best_acc2:
+                shutil.copy(logger.get_checkpoint_path('latest_model'), logger.get_checkpoint_path('best_model_test'))
+
+            best_acc2 = max(acc2, best_acc2)
+
+        print("best_acc2 = {:3.4f}".format(best_acc2))
+        # evaluate on test set
+        model.load_state_dict(torch.load(logger.get_checkpoint_path('best_model_test')))
+        acc3 = utils.validate_ulogits(test_loader, model, args, device)
+        print("base acc = {:3.4f}".format(acc3))
+        acc3 = combined_inference(model, test_loader, num_classes)
+        acc2 = utils.validate(test_loader, model, args, device)
+        print("acc3 = {:3.4f}".format(acc3))
+        print("Test Phase Best test_acc = {:3.2f}".format(acc2))
+
+        logger.close()
         return
 
 
@@ -324,7 +362,7 @@ if __name__ == '__main__':
                         help='whether output per-class accuracy during evaluation')
     parser.add_argument("--log", type=str, default='logs',
                         help="Where to save logs, checkpoints and debugging images.")
-    parser.add_argument("--phase", type=str, default='train', choices=['train', 'test', 'analysis'],
+    parser.add_argument("--phase", type=str, default='test', choices=['train', 'test', 'analysis'],
                         help="When phase is 'test', only test the model."
                              "When phase is 'analysis', only analysis the model.")
     # 模型超参数
@@ -333,7 +371,7 @@ if __name__ == '__main__':
     parser.add_argument('--train_batch_size', default=16, type=int)
     parser.add_argument('--s_dim', type=int, default=32, metavar='N')
     parser.add_argument('--hidden_dim', type=int, default=256, metavar='N')
-    parser.add_argument('--name', type=str, default='test', metavar='N')
+    parser.add_argument('--name', type=str, default='group1', metavar='N')
 
     parser.add_argument('--decouple_alpha', type=float, default=1., metavar='N')
     parser.add_argument('--decouple_beta', type=float, default=1., metavar='N')

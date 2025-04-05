@@ -4,7 +4,7 @@ declare -a device=(4)
 for ((i=0;i<${#seed[@]};++i)); do
 WANDB_MODE=disabled CUDA_VISIBLE_DEVICES=${device[0]} python ../../main4.py --data_dir=../../data --dataset=PACS --batch-size=48 \
 -s A,C,P -t S -a resnet18 \
---name=group1 \
+--name=group3 \
 --z_dim=64 --hidden_dim=256 \
 -i=1000 \
 --seed=${seed[i]} \

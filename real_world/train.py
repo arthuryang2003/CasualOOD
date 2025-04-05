@@ -176,11 +176,12 @@ def CasualOOD_finetune(train_target_iter: ForeverDataIterator, val_iter: Forever
 
         # 特征提取与伪标签生成
         z_u, z_s, u_logits, s_logits, tilde_s_logits,combined_logits = model.encode(img_train)
-        pseudo_labels = torch.argmax(u_logits, dim=1)
+        stable_pred_hard=F.softmax(u_logits,dim=1)
+        pseudo_labels = torch.argmax(stable_pred_hard, dim=1)
 
         # 分类损失（仅不稳定分支）
-        # logits = tilde_s_logits
-        logits = combined_logits
+        logits = tilde_s_logits
+        # logits = combined_logits
         loss_cls = F.cross_entropy(logits, pseudo_labels)
 
         # 准确率计算

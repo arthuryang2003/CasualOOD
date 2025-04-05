@@ -1,14 +1,13 @@
 declare -a seed=(8)
-declare -a device=(3)
+declare -a device=(4)
 
 for ((i=0;i<${#seed[@]};++i)); do
-WANDB_MODE=online  CUDA_VISIBLE_DEVICES=${device[0]} python ../../main3.py --root=../../../../da_datasets/pacs --batch-size=48 \
--d PACS -s C,S,P -t A -a resnet18 \
---name=PACS_test_To_A \
---z_dim=64 \
--i=1000 \
+WANDB_MODE=disabled CUDA_VISIBLE_DEVICES=${device[0]} python ../../main3.py --data_dir=../../data --dataset=PACS --batch-size=48 \
+-s S,C,P -t A -a resnet18 \
+--name=group3 \
+--z_dim=64 --hidden_dim=256 \
+-i=500 \
 --seed=${seed[i]} \
---train_batch_size=16 \
 --train_epochs=20 \
 --finetune_epochs=10 \
 --decouple_alpha=1.0 --decouple_beta=10.0 \
