@@ -73,8 +73,8 @@ def CasualOOD_train(train_source_iter: ForeverDataIterator, val_iter: ForeverDat
         # 各类损失项
         loss_cls_u = F.cross_entropy(u_logits, labels_train)
         loss_cls_s = F.cross_entropy(tilde_s_logits, labels_train)
-        loss_cls = F.cross_entropy(logits, labels_train)
-        # loss_cls =loss_cls_u+loss_cls_s
+        # loss_cls = F.cross_entropy(logits, labels_train)
+        loss_cls =loss_cls_u+loss_cls_s
 
         # 解耦损失（互信息近似）
         sim = F.cosine_similarity(z_u, z_s, dim=1)
@@ -179,6 +179,7 @@ def CasualOOD_finetune(train_target_iter: ForeverDataIterator, val_iter: Forever
         pseudo_labels = torch.argmax(u_logits, dim=1)
 
         # 分类损失（仅不稳定分支）
+        # logits = tilde_s_logits
         logits = combined_logits
         loss_cls = F.cross_entropy(logits, pseudo_labels)
 
@@ -393,8 +394,8 @@ def CasualOOD_train2(train_source_iter: ForeverDataIterator, val_iter: ForeverDa
         # 各类损失项
         loss_cls_u = F.cross_entropy(u_logits, labels_train)
         loss_cls_s = F.cross_entropy(tilde_s_logits, labels_train)
-        loss_cls = F.cross_entropy(logits, labels_train)
-
+        # loss_cls = F.cross_entropy(logits, labels_train)
+        loss_cls =loss_cls_s
         # 总损失 = 分类
         loss = loss_cls
 

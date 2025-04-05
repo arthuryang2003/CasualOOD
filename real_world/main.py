@@ -81,14 +81,14 @@ def main(args: argparse.Namespace):
     for env_i, env in enumerate(dataset):
 
         if dataset.ENVIRONMENTS[env_i]  in args.source:
-            val_s, train_s = misc.split_dataset(env,
+            train_s,val_s = misc.split_dataset(env,
                                           int(len(env) * args.source_split_ratio),
                                           misc.seed_hash(args.seed, env_i))
             train_source_dataset.append(train_s)
             val_source_dataset.append(val_s)
 
         elif dataset.ENVIRONMENTS[env_i]  in args.target:
-            val_t, train_t = misc.split_dataset(env,
+            train_t,val_t = misc.split_dataset(env,
                                                 int(len(env) * args.target_split_ratio),
                                                 misc.seed_hash(args.seed, env_i))
             train_target_dataset.append(train_t)
@@ -262,7 +262,7 @@ if __name__ == '__main__':
     #                     help='dataset: ' + ' | '.join(utils.get_dataset_names()) +
     #                          ' (default: PACS)')
 
-    parser.add_argument('--dataset', type=str, default="ColoredMNIST")
+    parser.add_argument('--dataset', type=str, default="PACS")
     parser.add_argument('--data_dir', type=str,default='./data')
 
     parser.add_argument('-s', '--source', help='source domain(s)', default='C,P,A')

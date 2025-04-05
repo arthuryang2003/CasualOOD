@@ -60,11 +60,11 @@ def main(args: argparse.Namespace):
     train_source_dataset, val_source_dataset, val_target_dataset, test_dataset = [], [], [], []
     for i, env in enumerate(dataset):
         if dataset.ENVIRONMENTS[i] in args.source:
-            val_s, train_s = misc.split_dataset(env, int(len(env) * args.source_split_ratio), misc.seed_hash(args.seed, i))
+            train_s, val_s = misc.split_dataset(env, int(len(env) * args.source_split_ratio), misc.seed_hash(args.seed, i))
             train_source_dataset.append(train_s)
             val_source_dataset.append(val_s)
         elif dataset.ENVIRONMENTS[i] in args.target:
-            val_t, train_t = misc.split_dataset(env, int(len(env) * args.target_split_ratio), misc.seed_hash(args.seed, i))
+            train_t, val_t = misc.split_dataset(env, int(len(env) * args.target_split_ratio), misc.seed_hash(args.seed, i))
             val_target_dataset.append(val_t)
             test_dataset.append(train_t)
             test_dataset.append(val_t)
