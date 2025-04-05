@@ -71,14 +71,14 @@ def main(args: argparse.Namespace):
     for env_i, env in enumerate(dataset):
 
         if dataset.ENVIRONMENTS[env_i]  in args.source:
-            val_s, train_s = misc.split_dataset(env,
+            train_s,val_s = misc.split_dataset(env,
                                           int(len(env) * args.source_split_ratio),
                                           misc.seed_hash(args.seed, env_i))
             train_source_dataset.append(train_s)
             val_source_dataset.append(val_s)
 
         elif dataset.ENVIRONMENTS[env_i]  in args.target:
-            val_t, train_t = misc.split_dataset(env,
+            train_t,val_t = misc.split_dataset(env,
                                                 int(len(env) * args.target_split_ratio),
                                                 misc.seed_hash(args.seed, env_i))
             train_target_dataset.append(train_t)
@@ -86,6 +86,7 @@ def main(args: argparse.Namespace):
 
             test_dataset.append(train_t)
             test_dataset.append(val_t)
+
 
     train_source_loader = [InfiniteDataLoader(
         dataset=env,  # 这里不需要列表展开
