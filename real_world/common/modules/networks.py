@@ -306,6 +306,9 @@ class IRMNet(ERMNet):
     def __init__(self, args, backbone_net=None):
         super(IRMNet, self).__init__(args, backbone_net)
         self.update_count = 0
+        # 设置默认 IRM 参数（如果 args 中没有定义）
+        self.irm_lambda = getattr(args, 'irm_lambda', 1.0)
+        self.irm_anneal_iters = getattr(args, 'irm_anneal_iters', 500)
 
     def irm_penalty(self, logits, y):
         device = logits.device
@@ -316,24 +319,15 @@ class IRMNet(ERMNet):
         grad_2 = autograd.grad(loss_2, [scale], create_graph=True)[0]
         return torch.sum(grad_1 * grad_2)
 
-    def get_penalized_loss(self, minibatches):
-        all_x = torch.cat([x for x, y in minibatches])
-        all_y = torch.cat([y for x, y in minibatches])
-        all_logits = self.forward(all_x)
+    def get_penalized_loss(self, x,y):
+        logits = self.forward(x)
+        batch_size = x.size(0)
+        assert batch_size % 2 == 0, "IRM penalty 计算需要偶数样本（交叉组合）"
 
-        penalty = 0.
-        nll = 0.
-        start = 0
-        for x, y in minibatches:
-            end = start + x.size(0)
-            logits = all_logits[start:end]
-            start = end
-            nll += F.cross_entropy(logits, y)
-            penalty += self.irm_penalty(logits, y)
-        nll /= len(minibatches)
-        penalty /= len(minibatches)
+        nll = F.cross_entropy(logits, y)
+        penalty = self.irm_penalty(logits, y)
 
-        penalty_weight = self.args.irm_lambda if self.update_count >= self.args.irm_anneal_iters else 1.0
+        penalty_weight = self.irm_lambda if self.update_count >= self.irm_anneal_iters else 1.0
         total_loss = nll + penalty_weight * penalty
 
         return total_loss, nll.item(), penalty.item()

@@ -87,7 +87,7 @@ def main(args: argparse.Namespace):
 
     if args.phase == 'test':
         model.load_state_dict(torch.load(logger.get_checkpoint_path('best_model_train')))
-        acc = utils.validate_logits(test_loader, model, args, device)
+        acc = utils.validate(test_loader, model, args, device)
         print("Test Accuracy = {:.2f}".format(acc))
         return
 
@@ -97,7 +97,7 @@ def main(args: argparse.Namespace):
         print("lr:", lr_scheduler.get_last_lr())
         IRM_train(train_source_iter, val_source_iter, model, optimizer, lr_scheduler, epoch, args, total_iter)
 
-        acc = utils.validate_logits(val_source_loader, model, args, device)
+        acc = utils.validate(val_source_loader, model, args, device)
         print("Val Acc = {:.4f}".format(acc))
         wandb.log({"IRM Val Acc": acc})
         with open(test_logger, 'a') as f:
@@ -110,7 +110,7 @@ def main(args: argparse.Namespace):
 
     print("Best Val Accuracy: {:.2f}".format(best_acc))
     model.load_state_dict(torch.load(logger.get_checkpoint_path('best_model_train')))
-    test_acc = utils.validate_logits(test_loader, model, args, device)
+    test_acc = utils.validate(test_loader, model, args, device)
     print("Test Accuracy = {:.2f}".format(test_acc))
     logger.close()
 

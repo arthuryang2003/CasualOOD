@@ -533,7 +533,10 @@ def IRM_train(train_source_iter: ForeverDataIterator, val_iter: ForeverDataItera
         data_time.update(time.time() - end)
 
         minibatches = next(train_source_iter)
-        loss, nll, penalty = model.get_penalized_loss(minibatches)
+        x = torch.cat([d[0] for d in minibatches]).to(device)
+        y = torch.cat([d[1] for d in minibatches]).to(device)
+
+        loss, nll, penalty = model.get_penalized_loss(x, y)
 
         optimizer.zero_grad()
         loss.backward()
@@ -542,8 +545,7 @@ def IRM_train(train_source_iter: ForeverDataIterator, val_iter: ForeverDataItera
 
         model.update_count += 1
 
-        x = torch.cat([d[0] for d in minibatches]).to(device)
-        y = torch.cat([d[1] for d in minibatches]).to(device)
+
         logits = model(x)
         acc = accuracy(logits, y)[0]
 
