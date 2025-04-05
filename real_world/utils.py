@@ -45,7 +45,10 @@ def get_model_names():
 def get_model(model_name, pretrain=True):
     if model_name in models.__dict__:
         # load models from common.vision.models
-        backbone = models.__dict__[model_name](pretrained=pretrain)
+        if model_name == 'MINST_CNN' :
+            backbone = models.__dict__[model_name]
+        else :
+            backbone = models.__dict__[model_name](pretrained=pretrain)
     else:
         # load models from pytorch-image-models
         backbone = timm.create_model(model_name, pretrained=pretrain)
