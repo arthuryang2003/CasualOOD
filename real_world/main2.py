@@ -7,6 +7,12 @@ import shutil
 import os.path as osp
 import os
 
+
+import datasets.datasets as datasets
+import datasets.misc as misc
+
+from datasets import datasets,misc
+from datasets.fast_data_loader import InfiniteDataLoader, FastDataLoader
 from common.modules.networks import CasualOOD
 
 sys.path.append('.')
@@ -25,14 +31,14 @@ from train import  CasualOOD_train,CasualOOD_finetune
 
 import utils
 
-from common.utils.data import ForeverDataIterator
+from utils import ForeverDataIterator
 from common.utils.metric import accuracy
 from common.utils.meter import AverageMeter, ProgressMeter
 from common.utils.logger import CompleteLogger
 from common.utils.analysis import collect_feature, tsne, a_distance
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-# os.environ['WANDB_MODE'] = 'disabled'
+os.environ['WANDB_MODE'] = 'disabled'
 
 def main(args: argparse.Namespace):
     logger = CompleteLogger(args.log, args.phase)
@@ -50,41 +56,87 @@ def main(args: argparse.Namespace):
 
     cudnn.benchmark = True
 
+
+    if args.dataset in vars(datasets):
+        dataset = vars(datasets)[args.dataset](args.data_dir,
+            args.target, args)
+    else:
+        raise NotImplementedError
+
+
     # 数据加载和预处理
-    train_transform = utils.get_train_transform(args.train_resizing, random_horizontal_flip=not args.no_hflip,
-                                                random_color_jitter=False, resize_size=args.resize_size,
-                                                norm_mean=args.norm_mean, norm_std=args.norm_std)
-    val_transform = utils.get_val_transform(args.val_resizing, resize_size=args.resize_size,
-                                            norm_mean=args.norm_mean, norm_std=args.norm_std)
-    print("train_transform: ", train_transform)
-    print("val_transform: ", val_transform)
+    # train_transform = utils.get_train_transform(args.train_resizing, random_horizontal_flip=not args.no_hflip,
+    #                                             random_color_jitter=False, resize_size=args.resize_size,
+    #                                             norm_mean=args.norm_mean, norm_std=args.norm_std)
+    # val_transform = utils.get_val_transform(args.val_resizing, resize_size=args.resize_size,
+    #                                         norm_mean=args.norm_mean, norm_std=args.norm_std)
+    # print("train_transform: ", train_transform)
+    # print("val_transform: ", val_transform)
 
-    train_source_dataset, train_target_dataset, val_source_dataset, val_target_dataset, test_dataset, args.num_classes, args.class_names=\
-        utils.get_dataset(args.data, args.root, args.source, args.target, train_transform, val_transform)
-    train_source_loader = DataLoader(train_source_dataset, batch_size=(args.n_domains-1)*args.train_batch_size,
-                                     num_workers=args.workers, drop_last=True,
-                                     #sampler=_make_balanced_sampler(train_source_dataset.domain_ids)
-                                     shuffle=True,
-                                     )
+    train_source_dataset = []
+    train_target_dataset = []
+    val_source_dataset = []
+    val_target_dataset = []
+    test_dataset = []
+    for env_i, env in enumerate(dataset):
 
-    val_source_loader = DataLoader(val_source_dataset, batch_size=args.batch_size, shuffle=False, num_workers=args.workers)
-    train_target_loader = DataLoader(train_target_dataset, batch_size=args.batch_size,
-                                     num_workers=args.workers, drop_last=True,
-                                     #sampler=_make_balanced_sampler(train_source_dataset.domain_ids)
-                                     shuffle=True,
-                                     )
+        if dataset.ENVIRONMENTS[env_i]  in args.source:
+            val_s, train_s = misc.split_dataset(env,
+                                          int(len(env) * args.source_split_ratio),
+                                          misc.seed_hash(args.seed, env_i))
+            train_source_dataset.append(train_s)
+            val_source_dataset.append(val_s)
 
-    val_target_loader = DataLoader(val_target_dataset, batch_size=args.batch_size, shuffle=False, num_workers=args.workers)
+        elif dataset.ENVIRONMENTS[env_i]  in args.target:
+            val_t, train_t = misc.split_dataset(env,
+                                                int(len(env) * args.target_split_ratio),
+                                                misc.seed_hash(args.seed, env_i))
+            train_target_dataset.append(train_t)
+            val_target_dataset.append(val_t)
 
-    test_loader = DataLoader(test_dataset, batch_size=args.batch_size, shuffle=False, num_workers=args.workers)
+            test_dataset.append(train_t)
+            test_dataset.append(val_t)
+
+    train_source_loader = [InfiniteDataLoader(
+        dataset=env,  # 这里不需要列表展开
+        weights=None,  # 如果没有特定的 sample 权重，可以设为 None
+        batch_size=args.batch_size,
+        num_workers=args.workers
+    ) for i, env in enumerate(train_source_dataset)]
+
+    train_target_loader = [InfiniteDataLoader(
+        dataset=env,  # 这里不需要列表展开
+        weights=None,  # 如果没有特定的 sample 权重，可以设为 None
+        batch_size=args.batch_size,
+        num_workers=args.workers
+    )for i, env in enumerate(train_target_dataset)]
+
+    val_source_loader = [FastDataLoader(
+        dataset=env,  # 这里不需要列表展开
+        batch_size=args.batch_size,
+        num_workers=args.workers
+    ) for i, env in enumerate(val_source_dataset)]
+
+    val_target_loader = [FastDataLoader(
+        dataset=env,  # 这里不需要列表展开
+        batch_size=args.batch_size,
+        num_workers=args.workers
+    )for i, env in enumerate(val_target_dataset)]
+
+    test_loader = [FastDataLoader(
+        dataset=env,  # 这里不需要列表展开
+        batch_size=args.batch_size,
+        num_workers=args.workers
+    )for i, env in enumerate(test_dataset)]
 
     train_source_iter = ForeverDataIterator(train_source_loader)
     val_source_iter = ForeverDataIterator(val_source_loader)
-    train_target_iter = ForeverDataIterator(train_target_loader)
     val_target_iter = ForeverDataIterator(val_target_loader)
+    train_target_iter = ForeverDataIterator(train_target_loader)
 
+    args.num_classes=dataset.num_classes
     # 通过目标数据集计算类别数量
-    num_classes = args.num_classes
+    num_classes = dataset.num_classes
 
     print("=> using model '{}'".format(args.arch))
     backbone = utils.get_model(args.arch, pretrain=not args.scratch)
@@ -99,7 +151,7 @@ def main(args: argparse.Namespace):
     print(optimizer.param_groups[0]['lr'], ' *** lr')
 
     # define finetune optimizer and lr scheduler
-    finetune_optimizer = SGD(model.get_parameters(),
+    finetune_optimizer = SGD(model.get_finetune_parameters(),
                     lr=args.lr, momentum=args.momentum, weight_decay=args.weight_decay, nesterov=True)
 
     print(finetune_optimizer.param_groups[0]['lr'], ' *** lr')
@@ -116,37 +168,6 @@ def main(args: argparse.Namespace):
 
     if args.phase == 'test':
         # start test and finetune
-        total_iter = 0
-        best_acc2 = 0.
-        for epoch in range(args.finetune_epochs):
-            print("lr:", finetune_lr_scheduler.get_last_lr(), finetune_optimizer.param_groups[0]['lr'])
-            # train for one epoch
-            CasualOOD_finetune(train_target_iter, val_target_iter, model, finetune_optimizer,
-                               lr_scheduler, epoch, args, total_iter, backbone)
-
-            # evaluate on validation set
-            acc2 = combined_inference(model, val_target_loader, num_classes)
-            print("acc2 = {:3.4f}".format(acc2))
-            wandb.log({"Model Val Acc": acc2})
-            message = '(epoch %d): Model Val Acc %.3f' % (epoch + 1, acc2)
-            print(message)
-            record = open(test_logger, 'a')
-            record.write(message + '\n')
-            record.close()
-
-            # remember best acc@1 and save checkpoint
-            torch.save(model.state_dict(), logger.get_checkpoint_path('latest_model'))
-            if acc2 > best_acc2:
-                shutil.copy(logger.get_checkpoint_path('latest_model'), logger.get_checkpoint_path('best_model'))
-
-            best_acc2 = max(acc2, best_acc2)
-
-        print("best_acc2 = {:3.4f}".format(best_acc2))
-        # evaluate on test set
-        model.load_state_dict(torch.load(logger.get_checkpoint_path('best_model')))
-        acc2 = combined_inference(model, test_loader, num_classes)
-        print("Test Phase Best test_acc = {:3.2f}".format(acc2))
-
         return
 
 
@@ -161,8 +182,7 @@ def main(args: argparse.Namespace):
               lr_scheduler, epoch, args, total_iter, backbone)
 
         # evaluate on validation set
-        acc1 = utils.validate1(val_source_loader, model, args, device)
-        # acc1 = utils.validate_decoupler(val_source_loader, model, args, device)
+        acc1 = utils.validate(val_source_loader, model, args, device)
         print("acc1 = {:3.4f}".format(acc1))
         wandb.log({"Model Val Acc": acc1})
         message = '(epoch %d): Model Val Acc %.3f' % (epoch+1, acc1)
@@ -181,9 +201,11 @@ def main(args: argparse.Namespace):
     print("best_acc1 = {:3.4f}".format(best_acc1))
     # evaluate on test set
     model.load_state_dict(torch.load(logger.get_checkpoint_path('best_model_train')))
-    acc1 = utils.validate1(test_loader, model, args,device)
-    print("Train Phase Best test_acc1 = {:3.2f}".format(acc1))
+    acc3 = utils.validate_ulogits(test_loader, model, args, device)
+    print("base acc = {:3.4f}".format(acc3))
 
+    acc1 = utils.validate(test_loader, model, args,device)
+    print("Train Phase Best test_acc1 = {:3.2f}".format(acc1))
 
 
     model.set_requires_grad(False)
@@ -198,8 +220,8 @@ def main(args: argparse.Namespace):
                         lr_scheduler, epoch, args, total_iter, backbone)
 
         # evaluate on validation set
-        acc2 = combined_inference(model, val_target_loader, num_classes)
-        acc3 = utils.validate1(val_target_loader, model, args, device)
+        acc3 = combined_inference(model, val_target_loader, num_classes)
+        acc2 = utils.validate(val_target_loader, model, args, device)
         print("acc2 = {:3.4f}".format(acc2))
         print("acc3 = {:3.4f}".format(acc3))
         wandb.log({"Model Val Acc": acc2})
@@ -211,18 +233,20 @@ def main(args: argparse.Namespace):
 
         # remember best acc@1 and save checkpoint
         torch.save(model.state_dict(), logger.get_checkpoint_path('latest_model'))
-        if acc3 > best_acc2:
+        if acc2 > best_acc2:
             shutil.copy(logger.get_checkpoint_path('latest_model'), logger.get_checkpoint_path('best_model_test'))
 
-        best_acc2 = max(acc3, best_acc2)
+        best_acc2 = max(acc2, best_acc2)
 
     print("best_acc2 = {:3.4f}".format(best_acc2))
     # evaluate on test set
     model.load_state_dict(torch.load(logger.get_checkpoint_path('best_model_test')))
-    acc2 = combined_inference(model, test_loader, num_classes)
-    acc3 = utils.validate1(test_loader, model, args, device)
-    print("acc2 = {:3.4f}".format(acc2))
-    print("Test Phase Best test_acc = {:3.2f}".format(acc3))
+    acc3 = utils.validate_ulogits(test_loader, model, args, device)
+    print("base acc = {:3.4f}".format(acc3))
+    acc3 = combined_inference(model, test_loader, num_classes)
+    acc2 = utils.validate(test_loader, model, args, device)
+    print("acc3 = {:3.4f}".format(acc3))
+    print("Test Phase Best test_acc = {:3.2f}".format(acc2))
 
 
     logger.close()
@@ -230,19 +254,25 @@ def main(args: argparse.Namespace):
 
 
 if __name__ == '__main__':
-    parser = argparse.ArgumentParser(description='DANN for Unsupervised Domain Adaptation')
+    parser = argparse.ArgumentParser(description='CasualOOD')
     # 数据集参数
-    parser.add_argument('--root', type=str, default='../../da_datasets/pacs',
-                        help='root path of dataset')   
-    parser.add_argument('-d', '--data', metavar='DATA', default='PACS', choices=utils.get_dataset_names(),
-                        help='dataset: ' + ' | '.join(utils.get_dataset_names()) +
-                             ' (default: PACS)')
+    # parser.add_argument('--root', type=str, default='../../da_datasets/pacs',
+    #                     help='root path of dataset')
+    # parser.add_argument('-d', '--data', metavar='DATA', default='PACS', choices=utils.get_dataset_names(),
+    #                     help='dataset: ' + ' | '.join(utils.get_dataset_names()) +
+    #                          ' (default: PACS)')
+
+    parser.add_argument('--dataset', type=str, default="ColoredMNIST")
+    parser.add_argument('--data_dir', type=str,default='./data')
+
     parser.add_argument('-s', '--source', help='source domain(s)', default='C,P,A')
     parser.add_argument('-t', '--target', help='target domain(s)', default='S')
     parser.add_argument('--train-resizing', type=str, default='default')
-    parser.add_argument('--val-resizing', type=str, default='default') 
+    parser.add_argument('--val-resizing', type=str, default='default')
     parser.add_argument('--resize-size', type=int, default=224,
-                        help='the image size after resizing') 
+                        help='the image size after resizing')
+    parser.add_argument('--data_augmentation', type=bool, default=True,
+                        help='apply data augmentation')
     parser.add_argument('--no-hflip', action='store_true',
                         help='no random horizontal flipping during training')
     parser.add_argument('--norm-mean', type=float, nargs='+',
@@ -280,7 +310,7 @@ if __name__ == '__main__':
                         help='number of data loading workers (default: 2)')
     parser.add_argument('--epochs', default=2, type=int, metavar='N',
                         help='number of total epochs to run')
-    parser.add_argument('-i', '--iters-per-epoch', default=1, type=int,
+    parser.add_argument('-i', '--iters-per-epoch', default=100, type=int,
                         help='Number of iterations per epoch')
     parser.add_argument('-p', '--print-freq', default=100, type=int,
                         metavar='N', help='print frequency (default: 100)')
@@ -302,52 +332,32 @@ if __name__ == '__main__':
     # parser.add_argument('--c_dim', type=int, default=32, metavar='N')
     parser.add_argument('--train_batch_size', default=16, type=int)
     parser.add_argument('--s_dim', type=int, default=32, metavar='N')
-    parser.add_argument('--hidden_dim', type=int, default=4096, metavar='N')
-    parser.add_argument('--beta', type=float, default=1., metavar='N')
-    parser.add_argument('--name', type=str, default='ours_PACS_KL_dim_8', metavar='N')
-    parser.add_argument('--flow', type=str, default='ddsf', metavar='N')
-    parser.add_argument('--flow_dim', type=int, default=16, metavar='N')
-    parser.add_argument('--flow_nlayer', type=int, default=2, metavar='N')
-    parser.add_argument('--init_value', type=float, default=0.0, metavar='N')
-    parser.add_argument('--flow_bound', type=int, default=5, metavar='N')
-    parser.add_argument('--flow_bins', type=int, default=8, metavar='N')
-    parser.add_argument('--flow_order', type=str, default='linear', metavar='N')
-    parser.add_argument('--net', type=str, default='dirt', metavar='N')
-    parser.add_argument('--n_flow', type=int, default=2, metavar='N')
-    parser.add_argument('--lambda_vae', type=float, default=5e-5, metavar='N')
-    parser.add_argument('--lambda_cls', type=float, default=1., metavar='N')
-    parser.add_argument('--lambda_ent', type=float, default=0.1, metavar='N')
-    parser.add_argument('--entropy_thr', type=float, default=0.5, metavar='N')
-    parser.add_argument('--C_max', type=float, default=15., metavar='N')
-    parser.add_argument('--C_stop_iter', type=int, default=10000, metavar='N')
+    parser.add_argument('--hidden_dim', type=int, default=256, metavar='N')
+    parser.add_argument('--name', type=str, default='test', metavar='N')
+
     parser.add_argument('--decouple_alpha', type=float, default=1., metavar='N')
     parser.add_argument('--decouple_beta', type=float, default=1., metavar='N')
-    parser.add_argument('--stable_epochs', type=int, default=1, metavar='N',
-                        help='number of stable epochs to run')
-    parser.add_argument('--unstable_epochs', type=int, default=1, metavar='N',
-                        help='number of unstable epochs to run')
-    parser.add_argument('--decoupler_epochs', type=int, default=1, metavar='N',
-                        help='number of decoupler epochs to run')
+
     parser.add_argument('--train_epochs', type=int, default=1, metavar='N',
                         help='number of train epochs to run')
     parser.add_argument('--finetune_epochs', type=int, default=1, metavar='N',
                         help='number of finetune epochs to run')
-    parser.add_argument('--target_split_ratio', type=float, default=0.8, metavar='N',
+    parser.add_argument('--source_split_ratio', type=float, default=0.8, metavar='N',
+                        help='ratio of source domain data used for training set (rest for testing)')
+
+    parser.add_argument('--target_split_ratio', type=float, default=0.2, metavar='N',
                         help='ratio of target domain data used for training set (rest for testing)')
 
     args = parser.parse_args()
-    model_id = f"{args.data}_{args.target}/{args.name}"
+    model_id = f"{args.dataset}_{args.target}/{args.name}"
     args.log = os.path.join(args.log, model_id)
 
     args.source = [i for i in args.source.split(',')]
     args.target = [i for i in args.target.split(',')]
     args.n_domains = len(args.source) + len(args.target)
-    args.input_dim = 2048
-    if 'pacs-vae' in args.root:
-        args.input_dim = 512
-        args.hidden_dim = 256
+
     args.norm_id = args.n_domains - 1
-    args.c_dim = args.z_dim - args.s_dim
+    # args.c_dim = args.z_dim - args.s_dim
 
     wandb.init(
         project="CasualOOD",
