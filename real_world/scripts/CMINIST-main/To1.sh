@@ -1,10 +1,10 @@
 declare -a seed=(4)
-declare -a device=(1)
+declare -a device=(6)
 
 for ((i=0;i<${#seed[@]};++i)); do
 WANDB_MODE=disabled CUDA_VISIBLE_DEVICES=${device[0]} python ../../main.py --data_dir=../../data --dataset=ColoredMNIST --batch-size=256 \
 -s '+80%','-90%' -t'+90%' -a lenet \
---name=group3 \
+--name=group1 \
 --z_dim=32 --hidden_dim=128 \
 -i=1000 \
 --seed=${seed[i]} \

@@ -1,5 +1,5 @@
 declare -a seed=(7)
-declare -a device=(5)
+declare -a device=(3)
 
 for ((i=0;i<${#seed[@]};++i)); do
 WANDB_MODE=disabled CUDA_VISIBLE_DEVICES=${device[0]} python ../../main5.py --data_dir=../../data --dataset=PACS --batch-size=48 \

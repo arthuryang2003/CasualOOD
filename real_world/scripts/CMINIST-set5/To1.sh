@@ -1,5 +1,5 @@
 declare -a seed=(4)
-declare -a device=(3)
+declare -a device=(4)
 
 for ((i=0;i<${#seed[@]};++i)); do
 WANDB_MODE=disabled CUDA_VISIBLE_DEVICES=${device[0]} python ../../main5.py --data_dir=../../data --dataset=ColoredMNIST --batch-size=256 \
@@ -11,5 +11,5 @@ WANDB_MODE=disabled CUDA_VISIBLE_DEVICES=${device[0]} python ../../main5.py --da
 --train_epochs=20 \
 --finetune_epochs=10 \
 --decouple_alpha=1.0 --decouple_beta=10.0 \
---phase=train
+--phase=test
 done
