@@ -177,7 +177,7 @@ def main(args: argparse.Namespace):
                                finetune_lr_scheduler, epoch, args, total_iter, backbone)
 
             # evaluate on validation set
-            acc2 = combined_inference(model, test_loader, num_classes)
+            acc2 = combined_inference(model, val_target_loader, num_classes)
             acc3 = utils.validate(val_target_loader, model, args, device)
             print("acc2 = {:3.4f}".format(acc2))
             print("acc3 = {:3.4f}".format(acc3))
