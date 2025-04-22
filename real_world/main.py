@@ -37,6 +37,12 @@ from common.utils.meter import AverageMeter, ProgressMeter
 from common.utils.logger import CompleteLogger
 from common.utils.analysis import collect_feature, tsne, a_distance
 
+import cv2
+import numpy as np
+import matplotlib.pyplot as plt
+from torchcam.methods import GradCAM
+from torchcam.utils import overlay_mask
+from torchvision.transforms.functional import to_pil_image
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 os.environ['WANDB_MODE'] = 'disabled'
 
@@ -166,6 +172,126 @@ def main(args: argparse.Namespace):
 
         model.load_state_dict(torch.load(logger.get_checkpoint_path('best_model_train')))
 
+    if args.phase == 'analysis':
+        model.load_state_dict(torch.load(logger.get_checkpoint_path('best_model_test')))
+
+        model.eval()
+
+        print("==> Running GradCAM analysis on u_logits and tilde_s_logits...")
+
+        # 创建保存目录
+        gradcam_dir = os.path.join(args.log, "gradcam_u_tildes")
+        os.makedirs(gradcam_dir, exist_ok=True)
+
+        def find_last_conv(model):
+            for layer in reversed(list(model.modules())):
+                if isinstance(layer, torch.nn.Conv2d):
+                    return layer
+            raise ValueError("No Conv2d layer found in model")
+
+        target_layer = find_last_conv(model.backbone_net)
+        cam_u = GradCAM(model, target_layer=target_layer)
+        cam_s = GradCAM(model, target_layer=target_layer)
+
+        # 定义测试集迭代器
+        test_iter = ForeverDataIterator(test_loader)
+
+        # 分析前5个 batch，每个取2张图
+        for batch_idx in range(5):
+            data, labels = next(test_iter)[0]
+            data, labels = data.to(device), labels.to(device)
+
+            for i in range(min(2, data.size(0))):
+                img = data[i].unsqueeze(0)  # shape: [1, C, H, W]
+                label = labels[i].item()
+
+                img.requires_grad_()  # 开启梯度追踪
+
+                # forward 计算 z_u, z_s 和 logits（每一步独立）
+                z_u, z_s, *_ = model.encode(img)
+                tilde_z_s = model.domain_influence(z_s)
+
+                logit_u = model.predict_u(z_u)
+                logit_s = model.predict_tilde_s(tilde_z_s)
+
+                class_idx_u = logit_u.argmax(dim=1).item()
+                class_idx_s = logit_s.argmax(dim=1).item()
+
+                # 第一次 forward，获取 cam_map_u
+                img.requires_grad_()
+                z_u, *_ = model.encode(img)
+                logit_u = model.predict_u(z_u)
+                cam_map_u = cam_u(class_idx_u, scores=logit_u)
+
+                # 第二次重新 forward，获取 cam_map_s
+                img.requires_grad_()
+                z_u, z_s, *_ = model.encode(img)
+                tilde_z_s = model.domain_influence(z_s)
+                logit_s = model.predict_tilde_s(tilde_z_s)
+                cam_map_s = cam_s(class_idx_s, scores=logit_s)
+
+                def cam_to_pil(cam_np):
+                    """
+                    将 [H, W] 或 [1, H, W] 的 numpy array 转为 PIL Image（mode='F'）
+                    """
+                    if isinstance(cam_np, torch.Tensor):
+                        cam_tensor = cam_np.detach().cpu()
+                    else:
+                        cam_tensor = torch.from_numpy(cam_np)
+
+                    if cam_tensor.ndim == 2:
+                        cam_tensor = cam_tensor.unsqueeze(0)  # → [1, H, W]
+                    elif cam_tensor.ndim == 3 and cam_tensor.shape[0] != 1:
+                        raise ValueError(f"Expected CAM shape [1, H, W] or [H, W], but got {cam_tensor.shape}")
+
+                    return to_pil_image(cam_tensor, mode='F')
+
+                cam_np_u = cam_map_u[0].squeeze().detach().cpu().numpy()
+                cam_np_u = cv2.resize(cam_np_u, (224, 224))
+                cam_np_s = cam_map_s[0].squeeze().detach().cpu().numpy()
+                cam_np_s = cv2.resize(cam_np_s, (224, 224))
+
+                def auto_color_map(img_tensor):
+                    """
+                    根据通道数生成彩色图像：
+                    - [3, H, W]: 原样返回
+                    - [2, H, W]: ColoredMNIST 红绿伪彩色
+                    - [1, H, W]: 转灰度 → repeat 3 通道
+                    """
+                    if img_tensor.shape[0] == 3:
+                        return img_tensor
+                    elif img_tensor.shape[0] == 2:
+                        r = img_tensor[0:1]
+                        g = img_tensor[1:2]
+                        b = torch.zeros_like(r)
+                        return torch.cat([r, g, b], dim=0)
+                    elif img_tensor.shape[0] == 1:
+                        return img_tensor.repeat(3, 1, 1)
+                    else:
+                        raise ValueError(f"Unsupported image shape: {img_tensor.shape}")
+
+                img_vis = auto_color_map(img[0].cpu() * 0.229 + 0.485)
+                img_vis = torch.clamp(img_vis, 0, 1)
+
+                heatmap_u = overlay_mask(to_pil_image(img_vis), cam_to_pil(cam_np_u), alpha=0.5)
+                heatmap_s = overlay_mask(to_pil_image(img_vis), cam_to_pil(cam_np_s), alpha=0.5)
+
+                # 保存可视化图
+                fig, axs = plt.subplots(1, 3, figsize=(12, 4))
+                axs[0].imshow(to_pil_image(img_vis))
+                axs[0].set_title(f"Original({label})")
+                axs[1].imshow(heatmap_u)
+                axs[1].set_title(f"GradCAM: u_logits ({class_idx_u})")
+                axs[2].imshow(heatmap_s)
+                axs[2].set_title(f"GradCAM: tilde_s_logits ({class_idx_s})")
+                for ax in axs:
+                    ax.axis('off')
+                plt.tight_layout()
+                save_path = os.path.join(gradcam_dir, f"sample_{batch_idx}_{i}.png")
+                plt.savefig(save_path)
+                plt.close()
+        return
+
     if args.phase == 'test':
         # start test and finetune
         total_iter = 0
@@ -207,6 +333,7 @@ def main(args: argparse.Namespace):
 
         logger.close()
         return
+
 
 
     model.set_requires_grad(True)
@@ -303,7 +430,7 @@ if __name__ == '__main__':
     parser.add_argument('--dataset', type=str, default="PACS")
     parser.add_argument('--data_dir', type=str,default='./data')
 
-    parser.add_argument('-s', '--source', help='source domain(s)', default='C,P,A')
+    parser.add_argument('-s', '--source', help='source domain(s)', default='A,C,P')
     parser.add_argument('-t', '--target', help='target domain(s)', default='S')
     parser.add_argument('--train-resizing', type=str, default='default')
     parser.add_argument('--val-resizing', type=str, default='default') 
@@ -320,11 +447,11 @@ if __name__ == '__main__':
 
 
     # 模型参数
-    parser.add_argument('-a', '--arch', metavar='ARCH', default='resnet18',
-                        choices=utils.get_model_names(),
-                        help='backbone architecture: ' +
-                             ' | '.join(utils.get_model_names()) +
-                             ' (default: resnet18)')
+    parser.add_argument('-a', '--arch', metavar='ARCH', default='resnet18')
+                        # choices=utils.get_model_names(),
+                        # help='backbone architecture: ' +
+                        #      ' | '.join(utils.get_model_names()) +
+                        #      ' (default: resnet18)')
     parser.add_argument('--bottleneck-dim', default=2048, type=int,
                         help='Dimension of bottleneck')
     parser.add_argument('--no-pool', action='store_true',
@@ -362,7 +489,7 @@ if __name__ == '__main__':
                         help='whether output per-class accuracy during evaluation')
     parser.add_argument("--log", type=str, default='logs',
                         help="Where to save logs, checkpoints and debugging images.")
-    parser.add_argument("--phase", type=str, default='test', choices=['train', 'test', 'analysis'],
+    parser.add_argument("--phase", type=str, default='analysis', choices=['train', 'test', 'analysis'],
                         help="When phase is 'test', only test the model."
                              "When phase is 'analysis', only analysis the model.")
     # 模型超参数
@@ -374,7 +501,7 @@ if __name__ == '__main__':
     parser.add_argument('--name', type=str, default='group1', metavar='N')
 
     parser.add_argument('--decouple_alpha', type=float, default=1., metavar='N')
-    parser.add_argument('--decouple_beta', type=float, default=1., metavar='N')
+    parser.add_argument('--decouple_beta', type=float, default=10., metavar='N')
 
     parser.add_argument('--train_epochs', type=int, default=1, metavar='N',
                         help='number of train epochs to run')
