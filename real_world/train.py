@@ -396,9 +396,9 @@ def CasualOOD_train2(train_source_iter: ForeverDataIterator, val_iter: ForeverDa
         loss_cls_u = F.cross_entropy(u_logits, labels_train)
         loss_cls_s = F.cross_entropy(tilde_s_logits, labels_train)
         loss_cls = F.cross_entropy(logits, labels_train)
-        # loss_cls =loss_cls_s
+        loss_cls =loss_cls_s
         # 总损失 = 分类
-        loss = loss_cls
+        # loss = loss_cls
 
         # 分类准确率
         cls_acc = accuracy(logits, labels_train)[0]
