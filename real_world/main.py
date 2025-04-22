@@ -168,19 +168,15 @@ def main(args: argparse.Namespace):
 
     test_logger = '%s/test.txt' % (args.log)
 
-    if args.phase != 'train':
-
-        model.load_state_dict(torch.load(logger.get_checkpoint_path('best_model_train')))
+    # if args.phase != 'train':
+    #     model.load_state_dict(torch.load(logger.get_checkpoint_path('best_model_test')))
 
     if args.phase == 'analysis':
         model.load_state_dict(torch.load(logger.get_checkpoint_path('best_model_test')))
-
         model.eval()
+        print("==> Running GradCAM analysis on disentangled features...")
 
-        print("==> Running GradCAM analysis on u_logits and tilde_s_logits...")
-
-        # 创建保存目录
-        gradcam_dir = os.path.join(args.log, "gradcam_u_tildes")
+        gradcam_dir = os.path.join(args.log, "gradcam_disentangled")
         os.makedirs(gradcam_dir, exist_ok=True)
 
         def find_last_conv(model):
@@ -190,108 +186,113 @@ def main(args: argparse.Namespace):
             raise ValueError("No Conv2d layer found in model")
 
         target_layer = find_last_conv(model.backbone_net)
-        cam_u = GradCAM(model, target_layer=target_layer)
-        cam_s = GradCAM(model, target_layer=target_layer)
+        cam = GradCAM(model, target_layer=target_layer)
 
-        # 定义测试集迭代器
         test_iter = ForeverDataIterator(test_loader)
 
-        # 分析前5个 batch，每个取2张图
+        def cam_to_pil(cam_np):
+            if isinstance(cam_np, torch.Tensor):
+                cam_tensor = cam_np.detach().cpu()
+            else:
+                cam_tensor = torch.from_numpy(cam_np)
+            if cam_tensor.ndim == 2:
+                cam_tensor = cam_tensor.unsqueeze(0)
+            elif cam_tensor.ndim == 3 and cam_tensor.shape[0] != 1:
+                raise ValueError(f"Expected CAM shape [1, H, W] or [H, W], but got {cam_tensor.shape}")
+            return to_pil_image(cam_tensor, mode='F')
+
+        def auto_color_map(img_tensor):
+            if img_tensor.shape[0] == 3:
+                return img_tensor
+            elif img_tensor.shape[0] == 2:
+                r, g = img_tensor[0:1], img_tensor[1:2]
+                b = torch.zeros_like(r)
+                return torch.cat([r, g, b], dim=0)
+            elif img_tensor.shape[0] == 1:
+                return img_tensor.repeat(3, 1, 1)
+            else:
+                raise ValueError(f"Unsupported image shape: {img_tensor.shape}")
+
+        def run_cam(img, class_idx, logit_fn, retain=False):
+            img = img.clone().detach().to(device).requires_grad_(True)
+            z_u, z_s, *_ = model.encode(img)
+            logits = logit_fn(z_u, z_s)
+            return cam(class_idx, scores=logits, retain_graph=retain)
+
         for batch_idx in range(5):
             data, labels = next(test_iter)[0]
             data, labels = data.to(device), labels.to(device)
 
             for i in range(min(2, data.size(0))):
-                img = data[i].unsqueeze(0)  # shape: [1, C, H, W]
+                img = data[i].unsqueeze(0)
                 label = labels[i].item()
 
-                img.requires_grad_()  # 开启梯度追踪
-
-                # forward 计算 z_u, z_s 和 logits（每一步独立）
-                z_u, z_s, *_ = model.encode(img)
-                tilde_z_s = model.domain_influence(z_s)
-
-                logit_u = model.predict_u(z_u)
-                logit_s = model.predict_tilde_s(tilde_z_s)
-
-                class_idx_u = logit_u.argmax(dim=1).item()
-                class_idx_s = logit_s.argmax(dim=1).item()
-
-                # 第一次 forward，获取 cam_map_u
-                img.requires_grad_()
-                z_u, *_ = model.encode(img)
-                logit_u = model.predict_u(z_u)
-                cam_map_u = cam_u(class_idx_u, scores=logit_u)
-
-                # 第二次重新 forward，获取 cam_map_s
-                img.requires_grad_()
-                z_u, z_s, *_ = model.encode(img)
-                tilde_z_s = model.domain_influence(z_s)
-                logit_s = model.predict_tilde_s(tilde_z_s)
-                cam_map_s = cam_s(class_idx_s, scores=logit_s)
-
-                def cam_to_pil(cam_np):
-                    """
-                    将 [H, W] 或 [1, H, W] 的 numpy array 转为 PIL Image（mode='F'）
-                    """
-                    if isinstance(cam_np, torch.Tensor):
-                        cam_tensor = cam_np.detach().cpu()
-                    else:
-                        cam_tensor = torch.from_numpy(cam_np)
-
-                    if cam_tensor.ndim == 2:
-                        cam_tensor = cam_tensor.unsqueeze(0)  # → [1, H, W]
-                    elif cam_tensor.ndim == 3 and cam_tensor.shape[0] != 1:
-                        raise ValueError(f"Expected CAM shape [1, H, W] or [H, W], but got {cam_tensor.shape}")
-
-                    return to_pil_image(cam_tensor, mode='F')
-
-                cam_np_u = cam_map_u[0].squeeze().detach().cpu().numpy()
-                cam_np_u = cv2.resize(cam_np_u, (224, 224))
-                cam_np_s = cam_map_s[0].squeeze().detach().cpu().numpy()
-                cam_np_s = cv2.resize(cam_np_s, (224, 224))
-
-                def auto_color_map(img_tensor):
-                    """
-                    根据通道数生成彩色图像：
-                    - [3, H, W]: 原样返回
-                    - [2, H, W]: ColoredMNIST 红绿伪彩色
-                    - [1, H, W]: 转灰度 → repeat 3 通道
-                    """
-                    if img_tensor.shape[0] == 3:
-                        return img_tensor
-                    elif img_tensor.shape[0] == 2:
-                        r = img_tensor[0:1]
-                        g = img_tensor[1:2]
-                        b = torch.zeros_like(r)
-                        return torch.cat([r, g, b], dim=0)
-                    elif img_tensor.shape[0] == 1:
-                        return img_tensor.repeat(3, 1, 1)
-                    else:
-                        raise ValueError(f"Unsupported image shape: {img_tensor.shape}")
-
+                # 原图像处理
                 img_vis = auto_color_map(img[0].cpu() * 0.229 + 0.485)
                 img_vis = torch.clamp(img_vis, 0, 1)
 
-                heatmap_u = overlay_mask(to_pil_image(img_vis), cam_to_pil(cam_np_u), alpha=0.5)
-                heatmap_s = overlay_mask(to_pil_image(img_vis), cam_to_pil(cam_np_s), alpha=0.5)
+                z_u, z_s, *_ = model.encode(img.requires_grad_(True))
+                logit_u = model.predict_u(z_u)
+                class_idx_u = logit_u.argmax(dim=1).item()
+                cam_map_u = cam(class_idx_u, scores=logit_u, retain_graph=True)
+                logit_s = model.predict_u(z_s)
+                class_idx_s = logit_s.argmax(dim=1).item()
+                cam_map_s = cam(class_idx_s, scores=logit_s, retain_graph=True)
 
-                # 保存可视化图
-                fig, axs = plt.subplots(1, 3, figsize=(12, 4))
+                tilde_z_s = model.domain_influence(z_s)
+                logit_tilde_s = model.predict_u(tilde_z_s)
+                class_idx_tilde_s = logit_tilde_s.argmax(dim=1).item()
+                cam_map_tilde_s = cam(class_idx_tilde_s, scores=logit_tilde_s, retain_graph=True)
+
+                combined_logit = logit_u + logit_s  # 按论文公式组合
+                class_idx_c = combined_logit.argmax(dim=1).item()
+                cam_map_c = cam(class_idx_c, scores=combined_logit, retain_graph=True)
+
+                # === 差异图 |z_s - z_s'| ===
+                cam_np_s = cam_map_s[0].squeeze().detach().cpu().numpy()
+                cam_np_tilde_s = cam_map_tilde_s[0].squeeze().detach().cpu().numpy()
+                diff_cam_map = np.abs(cam_np_s - cam_np_tilde_s)
+
+                # 可视化
+                heatmap_u = overlay_mask(to_pil_image(img_vis), cam_to_pil(cam_map_u[0]), alpha=0.5)
+                heatmap_s = overlay_mask(to_pil_image(img_vis), cam_to_pil(cam_map_s[0]), alpha=0.5)
+                heatmap_tilde_s = overlay_mask(to_pil_image(img_vis), cam_to_pil(cam_map_tilde_s[0]), alpha=0.5)
+                heatmap_diff = overlay_mask(to_pil_image(img_vis), cam_to_pil(diff_cam_map), alpha=0.5)
+
+                fig, axs = plt.subplots(1, 5, figsize=(16, 4))
                 axs[0].imshow(to_pil_image(img_vis))
                 axs[0].set_title(f"Original({label})")
                 axs[1].imshow(heatmap_u)
-                axs[1].set_title(f"GradCAM: u_logits ({class_idx_u})")
+                axs[1].set_title(f"GradCAM: z_u ({class_idx_u})")
                 axs[2].imshow(heatmap_s)
-                axs[2].set_title(f"GradCAM: tilde_s_logits ({class_idx_s})")
+                axs[2].set_title(f"GradCAM: z_s({class_idx_s})")
+                axs[3].imshow(heatmap_tilde_s)
+                axs[3].set_title(f"GradCAM: z_s'({class_idx_tilde_s})")
+                axs[4].imshow(heatmap_diff)
+                axs[4].set_title("GradCAM: |z_s - z_s'|")
+
                 for ax in axs:
                     ax.axis('off')
                 plt.tight_layout()
                 save_path = os.path.join(gradcam_dir, f"sample_{batch_idx}_{i}.png")
                 plt.savefig(save_path)
                 plt.close()
-        return
 
+                # # 获取 mask 向量（注意：self.mask 是一个 nn.Parameter，形状 [1, C]）
+                # mask_raw = model.mask.detach().cpu().numpy().squeeze()
+                # mask_sigmoid = torch.sigmoid(model.mask).detach().cpu().numpy().squeeze()
+                #
+                # # 绘图：mask sigmoid 后的通道权重
+                # plt.figure(figsize=(12, 3))
+                # plt.bar(range(len(mask_sigmoid)), mask_sigmoid)
+                # plt.title("Mask Channel Weights after Sigmoid")
+                # plt.xlabel("Channel index")
+                # plt.ylabel("Gate value (sigmoid)")
+                # plt.tight_layout()
+                # plt.savefig(os.path.join(gradcam_dir, "mask_weights.png"))
+                # plt.close()
+
+        return
     if args.phase == 'test':
         # start test and finetune
         total_iter = 0
