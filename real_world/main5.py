@@ -36,7 +36,12 @@ from common.utils.metric import accuracy
 from common.utils.meter import AverageMeter, ProgressMeter
 from common.utils.logger import CompleteLogger
 from common.utils.analysis import collect_feature, tsne, a_distance
-
+import cv2
+import numpy as np
+import matplotlib.pyplot as plt
+from torchcam.methods import GradCAM
+from torchcam.utils import overlay_mask
+from torchvision.transforms.functional import to_pil_image
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 os.environ['WANDB_MODE'] = 'disabled'
 
@@ -163,7 +168,126 @@ def main(args: argparse.Namespace):
 
     if args.phase != 'train':
         model.load_state_dict(torch.load(logger.get_checkpoint_path('best_model_train2')))
+    if args.phase == 'analysis':
+        model.load_state_dict(torch.load(logger.get_checkpoint_path('best_model_test')))
+        model.eval()
+        print("==> Running GradCAM analysis on disentangled features...")
 
+        gradcam_dir = os.path.join(args.log, "gradcam_disentangled")
+        os.makedirs(gradcam_dir, exist_ok=True)
+
+        def find_last_conv(model):
+            for layer in reversed(list(model.modules())):
+                if isinstance(layer, torch.nn.Conv2d):
+                    return layer
+            raise ValueError("No Conv2d layer found in model")
+
+        target_layer = find_last_conv(model.backbone_net)
+        cam = GradCAM(model, target_layer=target_layer)
+
+        test_iter = ForeverDataIterator(test_loader)
+
+        def cam_to_pil(cam_np):
+            if isinstance(cam_np, torch.Tensor):
+                cam_tensor = cam_np.detach().cpu()
+            else:
+                cam_tensor = torch.from_numpy(cam_np)
+            if cam_tensor.ndim == 2:
+                cam_tensor = cam_tensor.unsqueeze(0)
+            elif cam_tensor.ndim == 3 and cam_tensor.shape[0] != 1:
+                raise ValueError(f"Expected CAM shape [1, H, W] or [H, W], but got {cam_tensor.shape}")
+            return to_pil_image(cam_tensor, mode='F')
+
+        def auto_color_map(img_tensor):
+            if img_tensor.shape[0] == 3:
+                return img_tensor
+            elif img_tensor.shape[0] == 2:
+                r, g = img_tensor[0:1], img_tensor[1:2]
+                b = torch.zeros_like(r)
+                return torch.cat([r, g, b], dim=0)
+            elif img_tensor.shape[0] == 1:
+                return img_tensor.repeat(3, 1, 1)
+            else:
+                raise ValueError(f"Unsupported image shape: {img_tensor.shape}")
+
+        def run_cam(img, class_idx, logit_fn, retain=False):
+            img = img.clone().detach().to(device).requires_grad_(True)
+            z_u, z_s, *_ = model.encode(img)
+            logits = logit_fn(z_u, z_s)
+            return cam(class_idx, scores=logits, retain_graph=retain)
+
+        for batch_idx in range(5):
+            data, labels = next(train_source_iter)[0]
+            data, labels = data.to(device), labels.to(device)
+
+            for i in range(min(2, data.size(0))):
+                img = data[i].unsqueeze(0)
+                label = labels[i].item()
+
+                # 原图像处理
+                img_vis = auto_color_map(img[0].cpu() * 0.229 + 0.485)
+                img_vis = torch.clamp(img_vis, 0, 1)
+
+                z_u, z_s, *_ = model.encode(img.requires_grad_(True))
+                logit_u = model.predict_u(z_u)
+                class_idx_u = logit_u.argmax(dim=1).item()
+                cam_map_u = cam(label, scores=logit_u, retain_graph=True)
+                logit_s = model.predict_s(z_s)
+                class_idx_s = logit_s.argmax(dim=1).item()
+                cam_map_s = cam(label, scores=logit_s, retain_graph=True)
+
+                tilde_z_s = model.domain_influence(z_s)
+                logit_tilde_s = model.predict_u(tilde_z_s)
+                class_idx_tilde_s = logit_tilde_s.argmax(dim=1).item()
+                cam_map_tilde_s = cam(label, scores=logit_tilde_s, retain_graph=True)
+
+                combined_logit = logit_u + logit_s
+                class_idx_c = combined_logit.argmax(dim=1).item()
+                cam_map_c = cam(class_idx_c, scores=combined_logit, retain_graph=True)
+
+                drop_z_s=z_s-tilde_z_s
+                logit_drop_s=model.predict_u(drop_z_s)
+                class_idx_drop_s = logit_drop_s.argmax(dim=1).item()
+                cam_map_drop_s = cam(label, scores=logit_drop_s, retain_graph=True)
+
+
+                # 可视化
+                heatmap_u = overlay_mask(to_pil_image(img_vis), cam_to_pil(cam_map_u[0]), alpha=0.5)
+                heatmap_s = overlay_mask(to_pil_image(img_vis), cam_to_pil(cam_map_s[0]), alpha=0.5)
+                heatmap_tilde_s = overlay_mask(to_pil_image(img_vis), cam_to_pil(cam_map_tilde_s[0]), alpha=0.5)
+                heatmap_diff = overlay_mask(to_pil_image(img_vis), cam_to_pil(cam_map_drop_s[0]), alpha=0.5)
+
+                fig, axs = plt.subplots(1, 5, figsize=(16, 4))
+                axs[0].imshow(to_pil_image(img_vis))
+                axs[0].set_title(f"Original({label})")
+                axs[1].imshow(heatmap_u)
+                axs[1].set_title(f"GradCAM: z_u ({class_idx_u})")
+                axs[2].imshow(heatmap_s)
+                axs[2].set_title(f"GradCAM: z_s({class_idx_s})")
+                axs[3].imshow(heatmap_tilde_s)
+                axs[3].set_title(f"GradCAM: z_s'({class_idx_tilde_s})")
+                axs[4].imshow(heatmap_diff)
+                axs[4].set_title("GradCAM: |z_s - z_s'|")
+
+                for ax in axs:
+                    ax.axis('off')
+                plt.tight_layout()
+                save_path = os.path.join(gradcam_dir, f"sample_{batch_idx}_{i}.png")
+                plt.savefig(save_path)
+                plt.close()
+
+                mask_sigmoid = torch.sigmoid(model.mask).detach().cpu().numpy().squeeze()
+
+                # 绘图：mask sigmoid 后的通道权重
+                plt.figure(figsize=(12, 3))
+                plt.bar(range(len(mask_sigmoid)), mask_sigmoid)
+                plt.title("Mask Channel Weights after Sigmoid")
+                plt.xlabel("Channel index")
+                plt.ylabel("Gate value (sigmoid)")
+                plt.tight_layout()
+                plt.savefig(os.path.join(gradcam_dir, "mask_weights.png"))
+                plt.close()
+        return
     if args.phase == 'test':
         model.set_requires_grad(False)
 

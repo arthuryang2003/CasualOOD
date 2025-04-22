@@ -70,6 +70,14 @@ class CasualOOD(nn.Module):
             nn.Linear(dim, args.num_classes)
         )
 
+        self.classifier = nn.Sequential(
+            nn.Linear(self.z_dim, dim),
+            nn.BatchNorm1d(dim),
+            nn.ReLU(),
+            nn.Dropout(),
+            nn.Linear(dim, args.num_classes)
+        )
+
         self.mask = nn.Parameter(torch.ones(self.s_dim))  # 初始化为全1
 
         self.classifier_combined = nn.Sequential(
@@ -148,15 +156,15 @@ class CasualOOD(nn.Module):
         return logits
 
     def predict_u(self, z_u):
-        u_logits = self.classifier_u(z_u)
+        u_logits = self.classifier(z_u)
         return u_logits
 
     def predict_s(self, z_s):
-        s_logits = self.classifier_s(z_s)
+        s_logits = self.classifier(z_s)
         return s_logits
 
     def predict_tilde_s(self, tilde_z_s):
-        tilde_s_logits = self.classifier_tilde_s(tilde_z_s)
+        tilde_s_logits = self.classifier(tilde_z_s)
         return tilde_s_logits
 
     def domain_influence(self, z_s, hard=False):
@@ -208,10 +216,12 @@ class CasualOOD(nn.Module):
         base_params = itertools.chain(self.encoder.parameters(),
                                       self.projection_phi.parameters(),
                                       self.projection_psi.parameters(),
+                                      self.classifier.parameters(),
                                       self.classifier_combined.parameters(),
                                       self.classifier_u.parameters(),
                                       self.classifier_s.parameters(),
-                                      self.classifier_tilde_s.parameters())
+                                      self.classifier_tilde_s.parameters()
+                                      )
 
         params = [
             {"params": self.backbone_net.parameters(), "lr": 0.1 * base_lr},  # backbone使用较小的学习率
