@@ -157,15 +157,23 @@ class CasualOOD(nn.Module):
 
     def predict_u(self, z_u):
         u_logits = self.classifier(z_u)
+        # u_logits = self.classifier_u(z_u)
         return u_logits
 
     def predict_s(self, z_s):
         s_logits = self.classifier(z_s)
+        # s_logits = self.classifier_s(z_s)
         return s_logits
 
     def predict_tilde_s(self, tilde_z_s):
         tilde_s_logits = self.classifier(tilde_z_s)
+        # tilde_s_logits = self.classifier_tilde_s(tilde_z_s)
         return tilde_s_logits
+
+    def drop_spurious_features(self, z_s):
+        mask = torch.sigmoid(self.mask)
+        drop_z_s = (1 - mask) * z_s
+        return drop_z_s
 
     def domain_influence(self, z_s, hard=False):
 
@@ -199,13 +207,13 @@ class CasualOOD(nn.Module):
         # 合并 zu 和 tilde_zs
         tilde_z = torch.cat([z_u, tilde_z_s], dim=1)
 
-        # combined_logits = self.classifier_combined(tilde_z)
+        combined_logits = self.classifier_combined(tilde_z)
 
         # Get logits
         u_logits = self.predict_u(z_u)
         s_logits = self.predict_s(z_s)
         tilde_s_logits = self.predict_tilde_s(tilde_z_s)
-        combined_logits = u_logits+tilde_s_logits
+        # combined_logits = u_logits+tilde_s_logits
         return z_u, z_s, u_logits, s_logits, tilde_s_logits,combined_logits
 
 
