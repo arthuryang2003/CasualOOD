@@ -1,5 +1,5 @@
 # Copyright (c) Facebook, Inc. and its affiliates. All Rights Reserved
-
+import csv
 import os
 import torch
 from PIL import Image, ImageFile
@@ -8,10 +8,11 @@ import torchvision.datasets.folder
 from torch.utils.data import TensorDataset, Subset, ConcatDataset, Dataset
 from torchvision.datasets import MNIST, ImageFolder
 from torchvision.transforms.functional import rotate
-
+from pathlib import Path
 from wilds.datasets.camelyon17_dataset import Camelyon17Dataset
 from wilds.datasets.fmow_dataset import FMoWDataset
-
+import numpy as np
+import pandas as pd
 ImageFile.LOAD_TRUNCATED_IMAGES = True
 
 DATASETS = [
@@ -38,6 +39,9 @@ DATASETS = [
     "SpawriousM2M_easy",
     "SpawriousM2M_medium",
     "SpawriousM2M_hard",
+
+    'CelebA_Blond',
+    'Waterbirds',
 ]
 
 def get_dataset_class(dataset_name):
@@ -46,6 +50,9 @@ def get_dataset_class(dataset_name):
         raise NotImplementedError("Dataset not found: {}".format(dataset_name))
     return globals()[dataset_name]
 
+
+def get_normalize():
+    return transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
 
 def num_environments(dataset_name):
     return len(get_dataset_class(dataset_name).ENVIRONMENTS)
@@ -64,6 +71,132 @@ class MultipleDomainDataset:
     def __len__(self):
         return len(self.datasets)
 
+class CelebA_Environment(Dataset):
+    def __init__(self, target_attribute_id, split_csv, img_dir, transform=None):
+        self.img_dir = img_dir
+        self.transform = transform
+        file_names = []
+        attributes = []
+        with open(split_csv) as f:
+            reader = csv.reader(f)
+            next(reader)  # discard header
+            for row in reader:
+                file_names.append(row[0])
+                attributes.append(np.array(row[1:], dtype=int))
+        attributes = np.stack(attributes, axis=0)
+        self.samples = list(zip(file_names, list(attributes[:, target_attribute_id]), attributes))
+
+    def __len__(self):
+        return len(self.samples)
+
+    def __getitem__(self, index):
+        file_name, label, attrs = self.samples[index]
+        image = Image.open(Path(self.img_dir, file_name))
+        if self.transform:
+            image = self.transform(image)
+
+        blond = attrs[9]  # attr_id_blond
+        male = attrs[20]  # attr_id_male
+        attr_tensor = torch.tensor([blond, male])
+
+        label = torch.tensor(label)
+        return image, label
+
+class CelebA_Blond(MultipleDomainDataset):
+    CHECKPOINT_FREQ = 200
+    ENVIRONMENTS = ['tr_env1', 'tr_env2', 'te_env']
+    TARGET_ATTRIBUTE_ID = 9
+    def __init__(self, root, test_envs, args):
+        super().__init__()
+
+        transform = transforms.Compose([
+            transforms.CenterCrop(178),  # crop the face at the center, no stretching
+            transforms.Resize((224, 224)),
+            transforms.ToTensor(),
+            get_normalize(),
+        ])
+
+        augment_transform = transforms.Compose([
+            transforms.RandomResizedCrop((224, 224), scale=(0.7, 1.0),
+                                         ratio=(1.0, 1.3333333333333333)),
+            transforms.ColorJitter(0.3, 0.3, 0.3, 0.0),  # do not alter hue
+            transforms.RandomHorizontalFlip(),
+            transforms.ToTensor(),
+            get_normalize(),
+        ])
+
+        img_dir = Path(root, 'celeba', 'img_align_celeba','img_align_celeba')
+        self.datasets = []
+        for i, env_name in enumerate(self.ENVIRONMENTS):
+            if args.data_augmentation and (i not in test_envs):
+                env_transform = augment_transform
+            else:
+                env_transform = transform
+            split_csv = Path(root, 'celeba',  f'{env_name}.csv')
+            dataset = CelebA_Environment(self.TARGET_ATTRIBUTE_ID, split_csv, img_dir,
+                                         env_transform)
+            self.datasets.append(dataset)
+
+        self.input_shape = (3, 224, 224,)
+        self.num_classes = 2  # blond or not
+
+class Waterbirds_Environment(Dataset):
+    def __init__(self, split_csv, img_dir, transform=None):
+        self.img_dir = img_dir
+        self.transform = transform
+        self.metadata = pd.read_csv(split_csv)
+
+    def __len__(self):
+        return len(self.metadata)
+
+    def __getitem__(self, index):
+        row = self.metadata.iloc[index]
+        img_path = os.path.join(self.img_dir, row['img_filename'])
+        img = Image.open(img_path).convert('RGB')
+
+        label = int(row['y'])  # 0=landbird, 1=waterbird
+
+        if self.transform:
+            img = self.transform(img)
+
+        return img, label
+
+class Waterbirds(MultipleDomainDataset):
+    CHECKPOINT_FREQ = 200
+    ENVIRONMENTS = ['tr_env1', 'tr_env2', 'te_env']
+
+    def __init__(self, root, test_envs, args):
+        super().__init__()
+
+        transform = transforms.Compose([
+            transforms.Resize((224, 224)),
+            transforms.ToTensor(),
+            transforms.Normalize(mean=args.norm_mean, std=args.norm_std),
+        ])
+
+        augment_transform = transforms.Compose([
+            transforms.RandomResizedCrop((224, 224), scale=(0.7, 1.0)),
+            transforms.ColorJitter(0.3, 0.3, 0.3, 0.0),
+            transforms.RandomHorizontalFlip(),
+            transforms.ToTensor(),
+            transforms.Normalize(mean=args.norm_mean, std=args.norm_std),
+        ])
+
+        split_dir = Path(root, 'waterbirds','splits')
+        img_dir = Path(root, 'waterbirds')
+
+        self.datasets = []
+        for i, env_name in enumerate(self.ENVIRONMENTS):
+            if args.data_augmentation and (i not in test_envs):
+                env_transform = augment_transform
+            else:
+                env_transform = transform
+            split_csv = split_dir / f'{env_name}.csv'
+            dataset = Waterbirds_Environment(split_csv, img_dir, env_transform)
+            self.datasets.append(dataset)
+
+        self.input_shape = (3, 224, 224)
+        self.num_classes = 2
 
 class Debug(MultipleDomainDataset):
     def __init__(self, root, target, args):

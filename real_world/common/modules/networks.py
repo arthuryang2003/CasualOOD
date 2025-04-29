@@ -1,6 +1,7 @@
 import torch.nn as nn
 import torch.nn.functional as F
 import torch
+from pygments.lexer import combined
 from torch.autograd import Variable
 from torch.nn import Parameter
 import numpy as np
@@ -204,16 +205,19 @@ class CasualOOD(nn.Module):
         # De-influence z_s using Gumbel-Softmax with a learnable temperature
         tilde_z_s = self.domain_influence(z_s)  # Remove the domain influence; back to Gaussian
 
-        # 合并 zu 和 tilde_zs
-        tilde_z = torch.cat([z_u, tilde_z_s], dim=1)
-
-        combined_logits = self.classifier_combined(tilde_z)
-
         # Get logits
         u_logits = self.predict_u(z_u)
         s_logits = self.predict_s(z_s)
         tilde_s_logits = self.predict_tilde_s(tilde_z_s)
-        # combined_logits = u_logits+tilde_s_logits
+
+        if self.args.combine_method == 'logits':
+            combined_logits = u_logits + tilde_s_logits
+        elif self.args.combine_method == 'features':
+            tilde_z = torch.cat((z_u, tilde_z_s), dim=1)
+            combined_logits = self.classifier_combined(tilde_z)
+        else:
+            raise NotImplementedError
+
         return z_u, z_s, u_logits, s_logits, tilde_s_logits,combined_logits
 
 

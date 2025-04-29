@@ -3,6 +3,8 @@ import random
 import time
 import warnings
 import argparse
+from audioop import error
+
 import torch
 import torch.nn.functional as F
 from torch.optim import SGD
@@ -17,6 +19,33 @@ from common.utils import ForeverDataIterator
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 
+def compute_conditional_MI(zu, zs, y, num_classes):
+    batch_size, feat_dim = zu.size()
+
+    # one-hot
+    one_hot = F.one_hot(y, num_classes=num_classes).float()
+
+    # 计算每个类别的均值
+    sum_zs = one_hot.T @ zs  # [num_classes, feat_dim]
+    count_zs = one_hot.sum(dim=0, keepdim=True).T + 1e-6
+    mean_zs = sum_zs / count_zs
+
+    # 每个样本对应的同类均值
+    mean_zs_per_sample = mean_zs[y]  # [batch_size, feat_dim]
+
+    # 残差
+    diff = zs - mean_zs_per_sample  # [batch_size, feat_dim]
+
+    # 乘上zu
+    weighted_diff = zu * diff  # 元素乘 [batch_size, feat_dim]
+
+    # 求所有样本均值
+    avg_weighted_diff = weighted_diff.mean(dim=0)  # [feat_dim]
+
+    # 最后取L1范数
+    loss_MI = torch.norm(avg_weighted_diff, p=1)
+
+    return loss_MI
 
 
 def CasualOOD_train(train_source_iter: ForeverDataIterator, val_iter: ForeverDataIterator,
@@ -77,8 +106,11 @@ def CasualOOD_train(train_source_iter: ForeverDataIterator, val_iter: ForeverDat
         # loss_cls =loss_cls_u+loss_cls_s
 
         # 解耦损失（互信息近似）
-        sim = F.cosine_similarity(z_u, z_s, dim=1)
-        loss_MI = torch.mean(sim ** 2)
+        if args.mi_type == 'conditional':
+            loss_MI = compute_conditional_MI(z_u, z_s, labels_train, args.num_classes)
+        else:  # 'cosine'
+            sim = F.cosine_similarity(z_u, z_s, dim=1)
+            loss_MI = torch.mean(sim ** 2)
 
         # KL散度损失（不稳定特征）
         q_dist = torch.distributions.Normal(torch.zeros_like(s_logits), torch.ones_like(s_logits))
@@ -180,8 +212,13 @@ def CasualOOD_finetune(train_target_iter: ForeverDataIterator, val_iter: Forever
         pseudo_labels = torch.argmax(stable_pred_hard, dim=1)
 
         # 分类损失（仅不稳定分支）
-        logits = tilde_s_logits
-        # logits = combined_logits
+        if args.finetune_logits == 'tilde':
+            logits = tilde_s_logits
+        elif args.finetune_logits == 'combined':
+            logits = combined_logits
+        else:
+            raise NotImplementedError
+
         loss_cls = F.cross_entropy(logits, pseudo_labels)
 
         # 准确率计算
@@ -283,8 +320,11 @@ def CasualOOD_train1(train_source_iter: ForeverDataIterator, val_iter: ForeverDa
         loss_cls = loss_cls_u
 
         # 解耦损失（互信息近似）
-        sim = F.cosine_similarity(z_u, z_s, dim=1)
-        loss_MI = torch.mean(sim ** 2)
+        if args.mi_type == 'conditional':
+            loss_MI = compute_conditional_MI(z_u, z_s, labels_train, args.num_classes)
+        else:  # 'cosine'
+            sim = F.cosine_similarity(z_u, z_s, dim=1)
+            loss_MI = torch.mean(sim ** 2)
 
         # KL散度损失（不稳定特征）
         q_dist = torch.distributions.Normal(torch.zeros_like(s_logits), torch.ones_like(s_logits))
@@ -396,11 +436,17 @@ def CasualOOD_train2(train_source_iter: ForeverDataIterator, val_iter: ForeverDa
         loss_cls_u = F.cross_entropy(u_logits, labels_train)
         loss_cls_s = F.cross_entropy(tilde_s_logits, labels_train)
         loss_cls = F.cross_entropy(logits, labels_train)
-        loss_cls =loss_cls_s
-        # 总损失 = 分类
-        # loss = loss_cls
+        # 分类损失（仅不稳定分支）
+        if args.finetune_logits == 'tilde':
+            logits = tilde_s_logits
+        elif args.finetune_logits == 'combined':
+            logits = combined_logits
+        else:
+            raise NotImplementedError
 
-        # 分类准确率
+        loss = F.cross_entropy(logits, labels_train)
+
+        # 准确率计算
         cls_acc = accuracy(logits, labels_train)[0]
 
         # 统计指标更新

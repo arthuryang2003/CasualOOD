@@ -188,8 +188,6 @@ def main(args: argparse.Namespace):
         target_layer = find_last_conv(model.backbone_net)
         cam = GradCAM(model, target_layer=target_layer)
 
-        test_iter = ForeverDataIterator(test_loader)
-
         def cam_to_pil(cam_np):
             if isinstance(cam_np, torch.Tensor):
                 cam_tensor = cam_np.detach().cpu()
@@ -219,78 +217,92 @@ def main(args: argparse.Namespace):
             logits = logit_fn(z_u, z_s)
             return cam(class_idx, scores=logits, retain_graph=retain)
 
-        for batch_idx in range(5):
+        selected_samples = {0: [], 1: []}
+        max_per_class = 5
+
+        test_iter = ForeverDataIterator(test_loader)
+        while len(selected_samples[0]) < max_per_class or len(selected_samples[1]) < max_per_class:
             data, labels = next(test_iter)[0]
             data, labels = data.to(device), labels.to(device)
 
-            for i in range(min(2, data.size(0))):
-                img = data[i].unsqueeze(0)
-                label = labels[i].item()
+            # 保证梯度追踪
+            data.requires_grad_()
+            z_u, z_s, *_ = model.encode(data)
+            logit_u = model.predict_u(z_u)
+            pred_u = logit_u.argmax(dim=1)
 
-                # 原图像处理
-                img_vis = auto_color_map(img[0].cpu() * 0.229 + 0.485)
+            for i in range(data.size(0)):
+                label = labels[i].item()
+                pred = pred_u[i].item()
+                if label in [0, 1] and label == pred and len(selected_samples[label]) < max_per_class:
+                    selected_samples[label].append((data[i].unsqueeze(0), label))
+
+        # 对筛选结果进行GradCAM分析
+        for label_class in [0, 1]:
+            for i, (img, label) in enumerate(selected_samples[label_class]):
+                img = img.to(device).requires_grad_()
+
+                # 视觉展示准备
+                img_vis = auto_color_map(img[0].detach().cpu() * 0.229 + 0.485)
                 img_vis = torch.clamp(img_vis, 0, 1)
 
-                z_u, z_s, *_ = model.encode(img.requires_grad_(True))
-                logit_u = model.predict_u(z_u)
-                class_idx_u = logit_u.argmax(dim=1).item()
-                cam_map_u = cam(class_idx_u, scores=logit_u, retain_graph=True)
-                logit_s = model.predict_u(z_s)
-                class_idx_s = logit_s.argmax(dim=1).item()
-                cam_map_s = cam(class_idx_s, scores=logit_s, retain_graph=True)
+                with torch.enable_grad():
+                    z_u, z_s, *_ = model.encode(img)
+                    tilde_z_s = model.domain_influence(z_s)
+                    drop_z_s=model.drop_spurious_features(z_s)
+                    logit_u = model.predict_u(z_u)
+                    logit_s = model.predict_u(z_s)
+                    logit_tilde_s = model.predict_u(tilde_z_s)
+                    logit_drop_s = model.predict_u(drop_z_s)
+                    class_idx_u = logit_u.argmax(dim=1).item()
+                    class_idx_s = logit_s.argmax(dim=1).item()
+                    class_idx_t = logit_tilde_s.argmax(dim=1).item()
+                    class_idx_drop = logit_drop_s.argmax(dim=1).item()
 
-                tilde_z_s = model.domain_influence(z_s)
-                logit_tilde_s = model.predict_u(tilde_z_s)
-                class_idx_tilde_s = logit_tilde_s.argmax(dim=1).item()
-                cam_map_tilde_s = cam(class_idx_tilde_s, scores=logit_tilde_s, retain_graph=True)
+                    cam_map_u = cam(class_idx_u, scores=logit_u, retain_graph=True)
+                    cam_map_s = cam(class_idx_s, scores=logit_s, retain_graph=True)
+                    cam_map_tilde_s = cam(class_idx_t, scores=logit_tilde_s, retain_graph=True)
+                    cam_map_drop_s = cam(class_idx_drop, scores=logit_drop_s, retain_graph=True)
 
-                combined_logit = logit_u + logit_s  # 按论文公式组合
-                class_idx_c = combined_logit.argmax(dim=1).item()
-                cam_map_c = cam(class_idx_c, scores=combined_logit, retain_graph=True)
-
-                # === 差异图 |z_s - z_s'| ===
-                cam_np_s = cam_map_s[0].squeeze().detach().cpu().numpy()
-                cam_np_tilde_s = cam_map_tilde_s[0].squeeze().detach().cpu().numpy()
-                diff_cam_map = np.abs(cam_np_s - cam_np_tilde_s)
-
-                # 可视化
+                # 热力图叠加
                 heatmap_u = overlay_mask(to_pil_image(img_vis), cam_to_pil(cam_map_u[0]), alpha=0.5)
                 heatmap_s = overlay_mask(to_pil_image(img_vis), cam_to_pil(cam_map_s[0]), alpha=0.5)
                 heatmap_tilde_s = overlay_mask(to_pil_image(img_vis), cam_to_pil(cam_map_tilde_s[0]), alpha=0.5)
-                heatmap_diff = overlay_mask(to_pil_image(img_vis), cam_to_pil(diff_cam_map), alpha=0.5)
+                heatmap_diff = overlay_mask(to_pil_image(img_vis), cam_to_pil(cam_map_drop_s[0]), alpha=0.5)
 
+                # 可视化保存
                 fig, axs = plt.subplots(1, 5, figsize=(16, 4))
                 axs[0].imshow(to_pil_image(img_vis))
                 axs[0].set_title(f"Original({label})")
                 axs[1].imshow(heatmap_u)
-                axs[1].set_title(f"GradCAM: z_u ({class_idx_u})")
+                axs[1].set_title(f"GradCAM: z_u({class_idx_u})")
                 axs[2].imshow(heatmap_s)
                 axs[2].set_title(f"GradCAM: z_s({class_idx_s})")
                 axs[3].imshow(heatmap_tilde_s)
-                axs[3].set_title(f"GradCAM: z_s'({class_idx_tilde_s})")
+                axs[3].set_title(f"GradCAM: z_s'({class_idx_t})")
                 axs[4].imshow(heatmap_diff)
-                axs[4].set_title("GradCAM: |z_s - z_s'|")
+                axs[4].set_title(f"GradCAM: drop_z_s({class_idx_drop})")
 
                 for ax in axs:
                     ax.axis('off')
                 plt.tight_layout()
-                save_path = os.path.join(gradcam_dir, f"sample_{batch_idx}_{i}.png")
+                save_path = os.path.join(gradcam_dir, f"selected_class{label_class}_{i}.png")
                 plt.savefig(save_path)
                 plt.close()
 
-                # # 获取 mask 向量（注意：self.mask 是一个 nn.Parameter，形状 [1, C]）
-                # mask_raw = model.mask.detach().cpu().numpy().squeeze()
-                # mask_sigmoid = torch.sigmoid(model.mask).detach().cpu().numpy().squeeze()
-                #
-                # # 绘图：mask sigmoid 后的通道权重
-                # plt.figure(figsize=(12, 3))
-                # plt.bar(range(len(mask_sigmoid)), mask_sigmoid)
-                # plt.title("Mask Channel Weights after Sigmoid")
-                # plt.xlabel("Channel index")
-                # plt.ylabel("Gate value (sigmoid)")
-                # plt.tight_layout()
-                # plt.savefig(os.path.join(gradcam_dir, "mask_weights.png"))
-                # plt.close()
+        # # 获取 mask 向量（注意：self.mask 是一个 nn.Parameter，形状 [1, C]）
+        # mask_raw = model.mask.detach().cpu().numpy().squeeze()
+        mask_sigmoid = torch.sigmoid(model.mask).detach().cpu().numpy().squeeze()
+
+        # 绘图：mask sigmoid 后的通道权重
+        plt.figure(figsize=(12, 3))
+        plt.bar(range(len(mask_sigmoid)), mask_sigmoid)
+        plt.title("Mask Channel Weights after Sigmoid")
+        plt.xlabel("Channel index")
+        plt.ylabel("Gate value (sigmoid)")
+        plt.tight_layout()
+        plt.savefig(os.path.join(gradcam_dir, "mask_weights.png"))
+        plt.close()
 
         return
     if args.phase == 'test':
@@ -428,11 +440,11 @@ if __name__ == '__main__':
     #                     help='dataset: ' + ' | '.join(utils.get_dataset_names()) +
     #                          ' (default: PACS)')
 
-    parser.add_argument('--dataset', type=str, default="PACS")
+    parser.add_argument('--dataset', type=str, default="Waterbirds")
     parser.add_argument('--data_dir', type=str,default='./data')
 
-    parser.add_argument('-s', '--source', help='source domain(s)', default='A,C,P')
-    parser.add_argument('-t', '--target', help='target domain(s)', default='S')
+    parser.add_argument('-s', '--source', help='source domain(s)', default='tr_env1,tr_env2')
+    parser.add_argument('-t', '--target', help='target domain(s)', default='te_env')
     parser.add_argument('--train-resizing', type=str, default='default')
     parser.add_argument('--val-resizing', type=str, default='default') 
     parser.add_argument('--resize-size', type=int, default=224,
@@ -448,7 +460,7 @@ if __name__ == '__main__':
 
 
     # 模型参数
-    parser.add_argument('-a', '--arch', metavar='ARCH', default='resnet18')
+    parser.add_argument('-a', '--arch', metavar='ARCH', default='resnet50')
                         # choices=utils.get_model_names(),
                         # help='backbone architecture: ' +
                         #      ' | '.join(utils.get_model_names()) +
@@ -490,7 +502,7 @@ if __name__ == '__main__':
                         help='whether output per-class accuracy during evaluation')
     parser.add_argument("--log", type=str, default='logs',
                         help="Where to save logs, checkpoints and debugging images.")
-    parser.add_argument("--phase", type=str, default='analysis', choices=['train', 'test', 'analysis'],
+    parser.add_argument("--phase", type=str, default='train', choices=['train', 'test', 'analysis'],
                         help="When phase is 'test', only test the model."
                              "When phase is 'analysis', only analysis the model.")
     # 模型超参数
