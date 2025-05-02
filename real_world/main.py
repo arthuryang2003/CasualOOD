@@ -526,6 +526,16 @@ if __name__ == '__main__':
     parser.add_argument('--target_split_ratio', type=float, default=0.2, metavar='N',
                         help='ratio of target domain data used for training set (rest for testing)')
 
+    parser.add_argument('--combine_method', type=str, default='logits', choices=['logits', 'features'],
+                        help="How to combine inference results: 'logits' or 'features'")
+
+    parser.add_argument('--mi_type', type=str, default='conditional', choices=['conditional', 'cosine'],
+                        help="Mutual information type: 'conditional' or 'cosine'")
+
+    parser.add_argument('--finetune_logits', type=str, default='tilde', choices=['tilde', 'combined'],
+                        help="Which logits to use in finetune phase: 'tilde' or 'combined'")
+
+
     args = parser.parse_args()
     model_id = f"{args.dataset}_{args.target}/{args.name}"
     args.log = os.path.join(args.log, model_id)

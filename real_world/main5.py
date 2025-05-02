@@ -169,7 +169,7 @@ def main(args: argparse.Namespace):
     if args.phase != 'train':
         model.load_state_dict(torch.load(logger.get_checkpoint_path('best_model_train1')))
     if args.phase == 'analysis':
-        model.load_state_dict(torch.load(logger.get_checkpoint_path('best_model_test')))
+        model.load_state_dict(torch.load(logger.get_checkpoint_path('best_model_train1')))
         model.eval()
         print("==> Running GradCAM analysis on disentangled features...")
 
@@ -383,7 +383,6 @@ def main(args: argparse.Namespace):
     acc3 = utils.validate_ulogits(test_loader, model, args, device)
     print("base acc = {:3.4f}".format(acc3))
 
-    # model.load_state_dict(torch.load(logger.get_checkpoint_path('best_model_train1')))
 
 
     model.set_requires_grad_phase2()

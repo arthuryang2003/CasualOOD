@@ -26,16 +26,16 @@ def combined_inference(model, test_loader, num_classes):
 
                 z_u, z_s, u_logits, s_logits, tilde_s_logits, _ = model.encode(data)
                 Y_stable = torch.sigmoid(u_logits).squeeze()
-                Y_stable_hard = torch.argmax(Y_stable, dim=1)
+                # Y_stable_hard = torch.argmax(Y_stable, dim=1)
                 # Y_unstable = torch.sigmoid(tilde_s_logits).squeeze()
                 # Y_unstable_hard = torch.argmax(Y_stable, dim=1)
 
-                PY += Y_stable_hard.sum().item()
-                n1 += Y_stable_hard.sum().item()
-                n += Y_stable_hard.size(0)
+                PY += Y_stable.sum().item()
+                n1 += Y_stable.sum().item()
+                n += Y_stable.size(0)
 
-                e0 += ((1 - Y_stable_hard) * (1 - Y_stable_hard)).sum().item()
-                e1 += (Y_stable_hard * Y_stable_hard).sum().item()
+                e0 += ((1 - Y_stable) * (1 - Y_stable)).sum().item()
+                e1 += (Y_stable * Y_stable).sum().item()
 
         e0 = e0 / (n - n1 + 1e-6)
         e1 = e1 / (n1 + 1e-6)
@@ -83,8 +83,8 @@ def combined_inference(model, test_loader, num_classes):
                 z_u, z_s, u_logits, s_logits, tilde_s_logits, _ = model.encode(data)
 
                 stable_pred = F.softmax(u_logits, dim=1)
-                stable_pred_hard = torch.argmax(stable_pred, dim=1)
-                stable_pred_onehot = F.one_hot(stable_pred_hard, num_classes=num_classes).float()
+                # stable_pred_hard = torch.argmax(stable_pred, dim=1)
+                stable_pred_onehot = F.one_hot(stable_pred, num_classes=num_classes).float()
                 PY_raw += stable_pred_onehot.sum(dim=0)
 
         PY = PY_raw / PY_raw.sum()

@@ -181,7 +181,7 @@ def CasualOOD_finetune(train_target_iter: ForeverDataIterator, val_iter: Forever
     val_accs = AverageMeter('Val Acc', ':3.2f')  # 验证准确率
     progress = ProgressMeter(
         args.iters_per_epoch,
-        [batch_time, data_time, cls_losses, total_losses, cls_accs, stable_cls_losses, unstable_cls_losses, val_accs],
+        [batch_time, data_time, cls_losses, total_losses, cls_accs, val_accs],
         prefix="Epoch: [{}]".format(epoch)
     )
 

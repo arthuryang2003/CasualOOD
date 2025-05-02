@@ -1,15 +1,15 @@
 declare -a seed=(7)
-declare -a device=(4)
+declare -a device=(3)
 
 for ((i=0;i<${#seed[@]};++i)); do
 WANDB_MODE=disabled CUDA_VISIBLE_DEVICES=${device[0]} python ../../main5.py --data_dir=../../data --dataset=PACS --batch-size=48 \
 -s A,C,P -t S -a resnet18 \
---name=group3 \
+--name=group1 \
 --z_dim=64 --hidden_dim=256 \
--i=500 \
+-i=1000 \
 --seed=${seed[i]} \
 --train_epochs=20 \
 --finetune_epochs=10 \
 --decouple_alpha=1.0 --decouple_beta=10.0 \
---phase=test
+--phase=train
 done

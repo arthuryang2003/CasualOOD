@@ -45,17 +45,28 @@ for idx, row in train_metadata.iterrows():
         elif place == 0 and rand_val < 0.1:  # waterbird on land 10%
             tr2_rows.append(row)
 
-# == 测试环境：均匀取样
-# 50% land background, 50% water background, for both classes
+# # == 测试环境：均匀取样
+# te_rows = []
+#
+# for y in [0, 1]:
+#     for place in [0, 1]:
+#         subset = test_metadata[(test_metadata['y'] == y) & (test_metadata['place'] == place)]
+#         te_rows.append(subset)
+#
+# te_rows = pd.concat(te_rows).sample(frac=1, random_state=0)  # 打乱一下
 
-te_rows = []
+# == 只保留测试集中的 waterbird on land ==
+# y == 1: waterbird
+# place == 0: land background
 
-for y in [0, 1]:
-    for place in [0, 1]:
-        subset = test_metadata[(test_metadata['y'] == y) & (test_metadata['place'] == place)]
-        te_rows.append(subset)
+test_metadata_full = pd.concat([val_metadata, test_metadata])
+te_rows = test_metadata_full[(test_metadata_full['y'] == 1) & (test_metadata_full['place'] == 0)]
 
-te_rows = pd.concat(te_rows).sample(frac=1, random_state=0)  # 打乱一下
+print(f"[Info] te_env: {len(te_rows)} samples (waterbird on land only)")
+
+# 打乱
+te_rows = te_rows.sample(frac=1, random_state=0)
+
 
 # == 保存csv
 os.makedirs(os.path.join(root_dir, 'splits'), exist_ok=True)
