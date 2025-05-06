@@ -219,7 +219,7 @@ def main(args: argparse.Namespace):
 
         test_iter = ForeverDataIterator(test_loader)
         while len(selected_samples[0]) < max_per_class or len(selected_samples[1]) < max_per_class:
-            data, labels = next(test_iter)[0]
+            data, labels,_ = next(test_iter)[0]
             data, labels = data.to(device), labels.to(device)
 
             # 保证梯度追踪
@@ -478,8 +478,8 @@ if __name__ == '__main__':
     parser.add_argument('--dataset', type=str, default="ColoredMNIST")
     parser.add_argument('--data_dir', type=str, default='./data')
 
-    parser.add_argument('-s', '--source', help='source domain(s)', default='C,P,A')
-    parser.add_argument('-t', '--target', help='target domain(s)', default='S')
+    parser.add_argument('-s', '--source', help='source domain(s)', default='+90%,+80%')
+    parser.add_argument('-t', '--target', help='target domain(s)', default='-90%')
     parser.add_argument('--train-resizing', type=str, default='default')
     parser.add_argument('--val-resizing', type=str, default='default')
     parser.add_argument('--resize-size', type=int, default=224,
@@ -536,7 +536,7 @@ if __name__ == '__main__':
                         help='whether output per-class accuracy during evaluation')
     parser.add_argument("--log", type=str, default='logs',
                         help="Where to save logs, checkpoints and debugging images.")
-    parser.add_argument("--phase", type=str, default='train', choices=['train', 'test', 'analysis'],
+    parser.add_argument("--phase", type=str, default='analysis', choices=['train', 'test', 'analysis'],
                         help="When phase is 'test', only test the model."
                              "When phase is 'analysis', only analysis the model.")
     # 模型超参数
@@ -568,6 +568,14 @@ if __name__ == '__main__':
 
     parser.add_argument('--finetune_logits', type=str, default='tilde', choices=['tilde', 'combined'],
                         help="Which logits to use in finetune phase: 'tilde' or 'combined'")
+
+    parser.add_argument('--mmd_lambda', type=float, default=1.0, help='MMD loss weight')
+    parser.add_argument('--domain_lambda', type=float, default=1.0, help='Domain classifier loss weight')
+    parser.add_argument('--loss_selection_mode', type=str, default="add", choices=["add", "concat"],
+                        help="How to compute classification loss: add or concat logits")
+
+    parser.add_argument('--shared_classifier', action='store_true',
+                        help='Use a shared classifier for all feature branches')
 
     args = parser.parse_args()
     model_id = f"{args.dataset}_{args.target}/{args.name}"

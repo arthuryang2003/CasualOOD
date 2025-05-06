@@ -10,6 +10,7 @@ WANDB_MODE=disabled CUDA_VISIBLE_DEVICES=${device[0]} python ../../main.py --dat
 --seed=${seed[i]} \
 --train_epochs=20 \
 --finetune_epochs=10 \
---decouple_alpha=1.0 --decouple_beta=10.0 \
+--decouple_alpha=1.0 --decouple_beta=10.0 --mmd_lambda=1.0 --domain_lambda=1.0 \
+--combine_method=logits --mi_type=cosine --finetune_logits=tilde \
 --phase=analysis
 done

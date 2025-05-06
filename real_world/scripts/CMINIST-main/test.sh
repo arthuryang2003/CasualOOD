@@ -8,9 +8,9 @@ WANDB_MODE=disabled CUDA_VISIBLE_DEVICES=${device[0]} python ../../main.py --dat
 --z_dim=32 --hidden_dim=128 \
 -i=1000 \
 --seed=${seed[i]} \
---train_epochs=10 \
---finetune_epochs=5 \
---decouple_alpha=1.0 --decouple_beta=10.0 \
---combine_method=logits --mi_type=conditional --finetune_logits=combined \
+--train_epochs=2 \
+--finetune_epochs=1 \
+--decouple_alpha=1.0 --decouple_beta=10.0 --mmd_lambda=1.0 --domain_lambda=1.0 \
+--combine_method=features --mi_type=cosine --finetune_logits=combined --loss_selection_mode=concat \
 --phase=train
 done

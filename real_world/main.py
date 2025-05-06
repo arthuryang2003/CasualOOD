@@ -222,7 +222,7 @@ def main(args: argparse.Namespace):
 
         test_iter = ForeverDataIterator(test_loader)
         while len(selected_samples[0]) < max_per_class or len(selected_samples[1]) < max_per_class:
-            data, labels = next(test_iter)[0]
+            data, labels,_ = next(test_iter)[0]
             data, labels = data.to(device), labels.to(device)
 
             # 保证梯度追踪
@@ -384,6 +384,8 @@ def main(args: argparse.Namespace):
 
     acc1 = utils.validate(test_loader, model, args,device)
     print("Train Phase Best test_acc1 = {:3.2f}".format(acc1))
+    acc3 = combined_inference(model, test_loader, num_classes)
+    print("acc3 = {:3.4f}".format(acc3))
 
 
     model.set_requires_grad(False)
@@ -440,11 +442,11 @@ if __name__ == '__main__':
     #                     help='dataset: ' + ' | '.join(utils.get_dataset_names()) +
     #                          ' (default: PACS)')
 
-    parser.add_argument('--dataset', type=str, default="Waterbirds")
+    parser.add_argument('--dataset', type=str, default="PACS")
     parser.add_argument('--data_dir', type=str,default='./data')
 
-    parser.add_argument('-s', '--source', help='source domain(s)', default='tr_env1,tr_env2')
-    parser.add_argument('-t', '--target', help='target domain(s)', default='te_env')
+    parser.add_argument('-s', '--source', help='source domain(s)', default='A,C,P')
+    parser.add_argument('-t', '--target', help='target domain(s)', default='S')
     parser.add_argument('--train-resizing', type=str, default='default')
     parser.add_argument('--val-resizing', type=str, default='default') 
     parser.add_argument('--resize-size', type=int, default=224,
@@ -534,6 +536,11 @@ if __name__ == '__main__':
 
     parser.add_argument('--finetune_logits', type=str, default='tilde', choices=['tilde', 'combined'],
                         help="Which logits to use in finetune phase: 'tilde' or 'combined'")
+
+    parser.add_argument('--mmd_lambda', type=float, default=1.0, help='MMD loss weight')
+    parser.add_argument('--domain_lambda', type=float, default=1.0, help='Domain classifier loss weight')
+    parser.add_argument('--loss_selection_mode', type=str, default="add", choices=["add", "concat"],
+                        help="How to compute classification loss: add or concat logits")
 
 
     args = parser.parse_args()

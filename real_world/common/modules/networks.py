@@ -89,6 +89,14 @@ class CasualOOD(nn.Module):
             nn.Linear(dim, args.num_classes)
         )
 
+        self.domain_classifier = nn.Sequential(
+            nn.Linear(self.z_dim, dim),
+            nn.BatchNorm1d(dim),
+            nn.ReLU(),
+            nn.Dropout(),
+            nn.Linear(dim, args.n_domains)
+        )
+
     def set_requires_grad(self, requires_grad):
         """
         在训练时启用所有层的梯度，测试时只启用mask的梯度，其他层冻结。
@@ -232,7 +240,9 @@ class CasualOOD(nn.Module):
                                       self.classifier_combined.parameters(),
                                       self.classifier_u.parameters(),
                                       self.classifier_s.parameters(),
-                                      self.classifier_tilde_s.parameters()
+                                      self.classifier_tilde_s.parameters(),
+                                      self.domain_classifier.parameters()
+
                                       )
 
         params = [
@@ -277,7 +287,9 @@ class CasualOOD(nn.Module):
                                       self.projection_phi.parameters(),
                                       self.projection_psi.parameters(),
                                       self.classifier_u.parameters(),
-                                      self.classifier_s.parameters())
+                                      self.classifier_s.parameters(),
+                                      self.classifier.parameters(),
+                                      self.domain_classifier.parameters())
         params = [
             {"params": self.backbone_net.parameters(), "lr": 0.1 * base_lr},  # backbone使用较小的学习率
             {"params": base_params, "lr": 1.0 * base_lr},  # projection_phi, projection_psi, classifier使用默认学习率

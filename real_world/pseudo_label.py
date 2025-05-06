@@ -20,9 +20,9 @@ def combined_inference(model, test_loader, num_classes):
         e1 = 0.
 
         with torch.no_grad():
-            for data, labels in test_iter:
-                data = data.to(device)
-                labels = labels.to(device).float()
+            for batch_idx, batch in enumerate(test_iter):
+                data = batch[0].to(device)
+                labels = batch[1].to(device).float()
 
                 z_u, z_s, u_logits, s_logits, tilde_s_logits, _ = model.encode(data)
                 Y_stable = torch.sigmoid(u_logits).squeeze()
@@ -47,9 +47,9 @@ def combined_inference(model, test_loader, num_classes):
         OOD = 0
         test_iter = chain(*test_loader)
         with torch.no_grad():
-            for data, labels in test_iter:
-                data = data.to(device)
-                labels = labels.to(device).float()
+            for batch_idx, batch in enumerate(test_iter):
+                data = batch[0].to(device)
+                labels = batch[1].to(device).float()
 
                 z_u, z_s, u_logits, s_logits, tilde_s_logits, _ = model.encode(data)
                 Y_stable = torch.sigmoid(u_logits).squeeze()
@@ -76,6 +76,7 @@ def combined_inference(model, test_loader, num_classes):
         # ==== 多分类推理逻辑 ====
         PY_raw = torch.zeros(num_classes).to(device)
         test_iter = chain(*test_loader)
+        Y_soft_all = []  # 存所有soft label，后续计算混淆矩阵
 
         with torch.no_grad():
             for batch_idx, batch in enumerate(test_iter):
@@ -83,12 +84,13 @@ def combined_inference(model, test_loader, num_classes):
                 z_u, z_s, u_logits, s_logits, tilde_s_logits, _ = model.encode(data)
 
                 stable_pred = F.softmax(u_logits, dim=1)
-                # stable_pred_hard = torch.argmax(stable_pred, dim=1)
-                stable_pred_onehot = F.one_hot(stable_pred, num_classes=num_classes).float()
-                PY_raw += stable_pred_onehot.sum(dim=0)
+                Y_soft_all.append(stable_pred)
+                PY_raw += stable_pred.sum(dim=0)
 
         PY = PY_raw / PY_raw.sum()
-        e_matrix = PY_raw.unsqueeze(1) @ F.normalize(PY.unsqueeze(0), p=1, dim=1)
+        Y_soft_all = torch.cat(Y_soft_all, dim=0)
+
+        e_matrix = Y_soft_all.T @ F.normalize(Y_soft_all, p=1, dim=1)
 
         correct = 0
         total = 0

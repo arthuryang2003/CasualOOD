@@ -13,6 +13,8 @@ from wilds.datasets.camelyon17_dataset import Camelyon17Dataset
 from wilds.datasets.fmow_dataset import FMoWDataset
 import numpy as np
 import pandas as pd
+from torchvision.datasets import ImageFolder
+
 ImageFile.LOAD_TRUNCATED_IMAGES = True
 
 DATASETS = [
@@ -72,14 +74,16 @@ class MultipleDomainDataset:
         return len(self.datasets)
 
 class CelebA_Environment(Dataset):
-    def __init__(self, target_attribute_id, split_csv, img_dir, transform=None):
+    def __init__(self, target_attribute_id, split_csv, img_dir, transform=None, domain_id=0):
         self.img_dir = img_dir
         self.transform = transform
+        self.domain_id = domain_id
+
         file_names = []
         attributes = []
         with open(split_csv) as f:
             reader = csv.reader(f)
-            next(reader)  # discard header
+            next(reader)  # skip header
             for row in reader:
                 file_names.append(row[0])
                 attributes.append(np.array(row[1:], dtype=int))
@@ -91,7 +95,7 @@ class CelebA_Environment(Dataset):
 
     def __getitem__(self, index):
         file_name, label, attrs = self.samples[index]
-        image = Image.open(Path(self.img_dir, file_name))
+        image = Image.open(Path(self.img_dir, file_name)).convert("RGB")
         if self.transform:
             image = self.transform(image)
 
@@ -100,50 +104,51 @@ class CelebA_Environment(Dataset):
         attr_tensor = torch.tensor([blond, male])
 
         label = torch.tensor(label)
-        return image, label
+        return image, label, self.domain_id  # 加入 domain_id
 
 class CelebA_Blond(MultipleDomainDataset):
     CHECKPOINT_FREQ = 200
     ENVIRONMENTS = ['tr_env1', 'tr_env2', 'te_env']
     TARGET_ATTRIBUTE_ID = 9
+
     def __init__(self, root, test_envs, args):
         super().__init__()
 
         transform = transforms.Compose([
-            transforms.CenterCrop(178),  # crop the face at the center, no stretching
+            transforms.CenterCrop(178),
             transforms.Resize((224, 224)),
             transforms.ToTensor(),
             get_normalize(),
         ])
 
         augment_transform = transforms.Compose([
-            transforms.RandomResizedCrop((224, 224), scale=(0.7, 1.0),
-                                         ratio=(1.0, 1.3333333333333333)),
-            transforms.ColorJitter(0.3, 0.3, 0.3, 0.0),  # do not alter hue
+            transforms.RandomResizedCrop((224, 224), scale=(0.7, 1.0), ratio=(1.0, 4.0/3.0)),
+            transforms.ColorJitter(0.3, 0.3, 0.3, 0.0),
             transforms.RandomHorizontalFlip(),
             transforms.ToTensor(),
             get_normalize(),
         ])
 
-        img_dir = Path(root, 'celeba', 'img_align_celeba','img_align_celeba')
+        img_dir = Path(root, 'celeba', 'img_align_celeba', 'img_align_celeba')
         self.datasets = []
         for i, env_name in enumerate(self.ENVIRONMENTS):
             if args.data_augmentation and (i not in test_envs):
                 env_transform = augment_transform
             else:
                 env_transform = transform
-            split_csv = Path(root, 'celeba',  f'{env_name}.csv')
-            dataset = CelebA_Environment(self.TARGET_ATTRIBUTE_ID, split_csv, img_dir,
-                                         env_transform)
+            split_csv = Path(root, 'celeba', f'{env_name}.csv')
+            dataset = CelebA_Environment(self.TARGET_ATTRIBUTE_ID, split_csv, img_dir, env_transform, domain_id=i)
             self.datasets.append(dataset)
 
         self.input_shape = (3, 224, 224,)
-        self.num_classes = 2  # blond or not
+        self.num_classes = 2
+
 
 class Waterbirds_Environment(Dataset):
-    def __init__(self, split_csv, img_dir, transform=None):
+    def __init__(self, split_csv, img_dir, transform=None, domain_id=0):
         self.img_dir = img_dir
         self.transform = transform
+        self.domain_id = domain_id
         self.metadata = pd.read_csv(split_csv)
 
     def __len__(self):
@@ -153,13 +158,12 @@ class Waterbirds_Environment(Dataset):
         row = self.metadata.iloc[index]
         img_path = os.path.join(self.img_dir, row['img_filename'])
         img = Image.open(img_path).convert('RGB')
-
-        label = int(row['y'])  # 0=landbird, 1=waterbird
+        label = int(row['y'])
 
         if self.transform:
             img = self.transform(img)
 
-        return img, label
+        return img, label, self.domain_id  # 加入 domain_id
 
 class Waterbirds(MultipleDomainDataset):
     CHECKPOINT_FREQ = 200
@@ -182,7 +186,7 @@ class Waterbirds(MultipleDomainDataset):
             transforms.Normalize(mean=args.norm_mean, std=args.norm_std),
         ])
 
-        split_dir = Path(root, 'waterbirds','splits')
+        split_dir = Path(root, 'waterbirds', 'splits')
         img_dir = Path(root, 'waterbirds')
 
         self.datasets = []
@@ -192,11 +196,12 @@ class Waterbirds(MultipleDomainDataset):
             else:
                 env_transform = transform
             split_csv = split_dir / f'{env_name}.csv'
-            dataset = Waterbirds_Environment(split_csv, img_dir, env_transform)
+            dataset = Waterbirds_Environment(split_csv, img_dir, env_transform, domain_id=i)
             self.datasets.append(dataset)
 
         self.input_shape = (3, 224, 224)
         self.num_classes = 2
+
 
 class Debug(MultipleDomainDataset):
     def __init__(self, root, target, args):
@@ -253,38 +258,55 @@ class MultipleEnvironmentMNIST(MultipleDomainDataset):
         self.num_classes = num_classes
 
 
-class ColoredMNIST(MultipleEnvironmentMNIST):
+class ColoredMNIST(MultipleDomainDataset):
     ENVIRONMENTS = ['+90%', '+80%', '-90%']
 
     def __init__(self, root, target, args):
-        super(ColoredMNIST, self).__init__(root, [0.1, 0.2, 0.9],
-                                         self.color_dataset, (2, 28, 28,), 2)
+        super().__init__()
 
-        self.input_shape = (2, 28, 28,)
+        # 定义环境对应的 spurious correlation 概率
+        environments = [0.1, 0.2, 0.9]
+
+        # 加载原始 MNIST 数据集
+        original_dataset_tr = MNIST(root, train=True, download=True)
+        original_dataset_te = MNIST(root, train=False, download=True)
+        original_images = torch.cat((original_dataset_tr.data, original_dataset_te.data))
+        original_labels = torch.cat((original_dataset_tr.targets, original_dataset_te.targets))
+
+        # 打乱数据
+        shuffle = torch.randperm(len(original_images))
+        original_images = original_images[shuffle]
+        original_labels = original_labels[shuffle]
+
+        self.datasets = []
+        for i, env in enumerate(environments):
+            # 每隔 len(envs) 取一部分数据分给当前环境
+            images = original_images[i::len(environments)]
+            labels = original_labels[i::len(environments)]
+            self.datasets.append(self.color_dataset(images, labels, env, domain_id=i))
+
+        self.input_shape = (2, 28, 28)
         self.num_classes = 2
 
-    def color_dataset(self, images, labels, environment):
-        # # Subsample 2x for computational convenience
-        # images = images.reshape((-1, 28, 28))[:, ::2, ::2]
-        # Assign a binary label based on the digit
+    def color_dataset(self, images, labels, environment_prob, domain_id):
+        # 二分类标签：小于5为0，大于等于5为1
         labels = (labels < 5).float()
-        # Flip label with probability 0.25
-        labels = self.torch_xor_(labels,
-                                 self.torch_bernoulli_(0.25, len(labels)))
 
-        # Assign a color based on the label; flip the color with probability e
-        colors = self.torch_xor_(labels,
-                                 self.torch_bernoulli_(environment,
-                                                       len(labels)))
+        # 标签以 25% 概率翻转
+        labels = self.torch_xor_(labels, self.torch_bernoulli_(0.25, len(labels)))
+
+        # 颜色与标签高度相关，但以 environment_prob 概率翻转颜色
+        colors = self.torch_xor_(labels, self.torch_bernoulli_(environment_prob, len(labels)))
+
+        # 构造 2-channel 图像：一个通道设为 0（无颜色）
         images = torch.stack([images, images], dim=1)
-        # Apply the color to the image by zeroing out the other color channel
-        images[torch.tensor(range(len(images))), (
-            1 - colors).long(), :, :] *= 0
+        images[torch.arange(len(images)), (1 - colors).long(), :, :] *= 0
 
         x = images.float().div_(255.0)
         y = labels.view(-1).long()
+        domain = torch.full_like(y, fill_value=domain_id, dtype=torch.long)
 
-        return TensorDataset(x, y)
+        return TensorDataset(x, y, domain)
 
     def torch_bernoulli_(self, p, size):
         return (torch.rand(size) < p).float()
@@ -315,6 +337,17 @@ class RotatedMNIST(MultipleEnvironmentMNIST):
 
         return TensorDataset(x, y)
 
+class ImageFolderWithDomain(ImageFolder):
+    def __init__(self, root, transform=None, domain_id=0):
+        super().__init__(root, transform=transform)
+        self.domain_id = domain_id
+
+    def __getitem__(self, index):
+        path, target = self.samples[index]
+        sample = self.loader(path)
+        if self.transform is not None:
+            sample = self.transform(sample)
+        return sample, target, self.domain_id  # ← 增加 domain_id
 
 class MultipleEnvironmentImageFolder(MultipleDomainDataset):
     def __init__(self, root, target, augment, args):
@@ -325,37 +358,34 @@ class MultipleEnvironmentImageFolder(MultipleDomainDataset):
         transform = transforms.Compose([
             transforms.Resize((224,224)),
             transforms.ToTensor(),
-            transforms.Normalize(
-                mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
+            transforms.Normalize(mean=[0.485, 0.456, 0.406],
+                                 std=[0.229, 0.224, 0.225])
         ])
 
         augment_transform = transforms.Compose([
-            # transforms.Resize((224,224)),
             transforms.RandomResizedCrop(224, scale=(0.7, 1.0)),
             transforms.RandomHorizontalFlip(),
             transforms.ColorJitter(0.3, 0.3, 0.3, 0.3),
             transforms.RandomGrayscale(),
             transforms.ToTensor(),
-            transforms.Normalize(
-                mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
+            transforms.Normalize(mean=[0.485, 0.456, 0.406],
+                                 std=[0.229, 0.224, 0.225]),
         ])
 
         self.datasets = []
         for i, environment in enumerate(environments):
-
             if augment and (self.ENVIRONMENTS[i] not in target):
                 env_transform = augment_transform
             else:
                 env_transform = transform
 
             path = os.path.join(root, environment)
-            env_dataset = ImageFolder(path,
-                transform=env_transform)
-
+            env_dataset = ImageFolderWithDomain(path, transform=env_transform, domain_id=i)
             self.datasets.append(env_dataset)
 
         self.input_shape = (3, 224, 224,)
         self.num_classes = len(self.datasets[-1].classes)
+
 
 class VLCS(MultipleEnvironmentImageFolder):
     CHECKPOINT_FREQ = 300

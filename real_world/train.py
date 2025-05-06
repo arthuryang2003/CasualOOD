@@ -18,6 +18,59 @@ from common.utils import ForeverDataIterator
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
+def compute_mmd(x: torch.Tensor, domain_labels: torch.Tensor,
+                kernel_mul: float = 2.0, kernel_num: int = 5, fix_sigma=None) -> torch.Tensor:
+    """
+    输入:
+        x: (N, D) 特征（例如 z_u）
+        domain_labels: (N,) 域标签（整型张量）
+    输出:
+        mmd_loss: 标量张量，表示不同域之间的 MMD 平均差异
+    """
+    unique_domains = domain_labels.unique()
+    domain_features = [x[domain_labels == dom] for dom in unique_domains]
+
+    mmd_loss = 0.
+    count = 0
+    for i in range(len(domain_features)):
+        for j in range(i + 1, len(domain_features)):
+            xi = domain_features[i]
+            xj = domain_features[j]
+            if xi.size(0) < 2 or xj.size(0) < 2:
+                continue
+            mmd_loss += _mmd_pairwise(xi, xj, kernel_mul, kernel_num, fix_sigma)
+            count += 1
+
+    return mmd_loss / max(count, 1)
+
+
+def _gaussian_kernel(source, target, kernel_mul, kernel_num, fix_sigma):
+    total = torch.cat([source, target], dim=0)
+    n_samples = total.size(0)
+    L2_distance = ((total.unsqueeze(0) - total.unsqueeze(1)) ** 2).sum(2)
+
+    if fix_sigma:
+        bandwidth = fix_sigma
+    else:
+        bandwidth = torch.sum(L2_distance.data) / (n_samples**2 - n_samples)
+        bandwidth = torch.clamp(bandwidth, min=1e-3)
+    bandwidth /= kernel_mul ** (kernel_num // 2)
+    bandwidth_list = [bandwidth * (kernel_mul ** i) for i in range(kernel_num)]
+
+    kernels = [torch.exp(-L2_distance / bw) for bw in bandwidth_list]
+    return sum(kernels)  # (N+M, N+M)
+
+
+def _mmd_pairwise(source, target, kernel_mul, kernel_num, fix_sigma):
+    n = source.size(0)
+    m = target.size(0)
+    kernels = _gaussian_kernel(source, target, kernel_mul, kernel_num, fix_sigma)
+
+    XX = kernels[:n, :n].mean()
+    YY = kernels[n:, n:].mean()
+    XY = kernels[:n, n:].mean()
+    YX = kernels[n:, :n].mean()
+    return XX + YY - XY - YX
 
 def compute_conditional_MI(zu, zs, y, num_classes):
     batch_size, feat_dim = zu.size()
@@ -63,9 +116,11 @@ def CasualOOD_train(train_source_iter: ForeverDataIterator, val_iter: ForeverDat
     cls_losses = AverageMeter('Cls', ':4.2f')  # 分类损失
     cls_accs = AverageMeter('Cls Acc', ':3.2f')  # 分类准确率
     val_accs = AverageMeter('Val Acc', ':3.2f')  # 验证准确率
+    MMD_losses = AverageMeter('MMD', ':4.2f')
+    DomCls_losses = AverageMeter('DomCls', ':4.2f')
     progress = ProgressMeter(
         args.iters_per_epoch,
-        [batch_time, data_time, cls_losses, total_losses,cls_accs,stable_cls_losses,unstable_cls_losses, KL_losses,MI_losses, val_accs],
+        [batch_time, data_time, cls_losses, total_losses,cls_accs,stable_cls_losses,unstable_cls_losses, KL_losses,MI_losses,MMD_losses, DomCls_losses,val_accs],
         prefix="Epoch: [{}]".format(epoch)
     )
 
@@ -84,15 +139,18 @@ def CasualOOD_train(train_source_iter: ForeverDataIterator, val_iter: ForeverDat
         val_minibatches = next(val_iter)  # list of (x, y)
 
         # 将不同 domain 的数据合并
-        img_train = torch.cat([x for x, y in train_minibatches])
-        labels_train = torch.cat([y for x, y in train_minibatches])
+        img_train = torch.cat([d[0] for d in train_minibatches])
+        labels_train = torch.cat([d[1] for d in train_minibatches])
 
-        img_val = torch.cat([x for x, y in val_minibatches])
-        labels_val = torch.cat([y for x, y in val_minibatches])
+        img_val = torch.cat([d[0] for d in val_minibatches])
+        labels_val = torch.cat([d[1] for d in val_minibatches])
+
+        domains_train = torch.cat([d for x, y, d in train_minibatches])
 
         # 将图像和标签数据移至GPU
         img_train = img_train.to(device)
         labels_train = labels_train.to(device)
+        domains_train= domains_train.to(device)
 
         # 特征提取
         z_u, z_s, u_logits, s_logits, tilde_s_logits,combined_logits = model.encode(img_train)
@@ -102,8 +160,24 @@ def CasualOOD_train(train_source_iter: ForeverDataIterator, val_iter: ForeverDat
         # 各类损失项
         loss_cls_u = F.cross_entropy(u_logits, labels_train)
         loss_cls_s = F.cross_entropy(tilde_s_logits, labels_train)
-        loss_cls = F.cross_entropy(logits, labels_train)
-        # loss_cls =loss_cls_u+loss_cls_s
+        if args.loss_selection_mode == "add":
+            # 分别计算 stable 与 unstable 分类器的损失后相加
+            loss_cls = loss_cls_u + loss_cls_s
+
+        elif args.loss_selection_mode == "concat":
+
+            loss_cls = F.cross_entropy(logits, labels_train)
+
+        else:
+            raise ValueError(f"Unsupported loss_selection_mode: {args.loss_selection_mode}")
+
+        # === MMD Loss: Encourage z_u independence from domain ===
+        loss_mmd = compute_mmd(z_u, domains_train)
+
+        # === Domain Classification Loss on z_s ===
+        domain_logits = model.domain_classifier(z_s)
+        loss_domain_cls = F.cross_entropy(domain_logits, domains_train)
+
 
         # 解耦损失（互信息近似）
         if args.mi_type == 'conditional':
@@ -118,8 +192,11 @@ def CasualOOD_train(train_source_iter: ForeverDataIterator, val_iter: ForeverDat
         loss_kl = -log_qz.mean()
 
         # 总损失 = 分类 + KL + 互信息
-        loss = loss_cls + args.decouple_alpha * loss_kl + args.decouple_beta * loss_MI
-
+        loss = (loss_cls
+                # + args.decouple_alpha * loss_kl
+                + args.decouple_beta * loss_MI
+                + args.mmd_lambda * loss_mmd
+                + args.domain_lambda * loss_domain_cls)
         # 分类准确率
         cls_acc = accuracy(logits, labels_train)[0]
 
@@ -131,6 +208,8 @@ def CasualOOD_train(train_source_iter: ForeverDataIterator, val_iter: ForeverDat
         total_losses.update(loss.item(), logits.size(0))
         KL_losses.update(loss_kl.item(), logits.size(0))
         MI_losses.update(loss_MI.item(), logits.size(0))
+        MMD_losses.update(loss_mmd.item(), logits.size(0))
+        DomCls_losses.update(loss_domain_cls.item(), logits.size(0))
 
         # 反向传播
         optimizer.zero_grad()
@@ -201,10 +280,13 @@ def CasualOOD_finetune(train_target_iter: ForeverDataIterator, val_iter: Forever
         val_minibatches = next(val_iter)
 
         # 合并不同 domain 的样本
-        img_train = torch.cat([x for x, y in train_minibatches]).to(device)
-        labels_train = torch.cat([y for x, y in train_minibatches])  # 用于伪标签评估可选
-        img_val = torch.cat([x for x, y in val_minibatches]).to(device)
-        labels_val = torch.cat([y for x, y in val_minibatches]).to(device)
+        img_train = torch.cat([d[0] for d in train_minibatches])
+        # labels_train = torch.cat([d[1] for d in train_minibatches])
+        img_val = torch.cat([d[0] for d in val_minibatches])
+        labels_val = torch.cat([d[1] for d in val_minibatches])
+
+        # 将图像和标签数据移至GPU
+        img_train = img_train.to(device)
 
         # 特征提取与伪标签生成
         z_u, z_s, u_logits, s_logits, tilde_s_logits,combined_logits = model.encode(img_train)
@@ -279,9 +361,11 @@ def CasualOOD_train1(train_source_iter: ForeverDataIterator, val_iter: ForeverDa
     cls_losses = AverageMeter('Cls', ':4.2f')  # 分类损失
     cls_accs = AverageMeter('Cls Acc', ':3.2f')  # 分类准确率
     val_accs = AverageMeter('Val Acc', ':3.2f')  # 验证准确率
+    MMD_losses = AverageMeter('MMD', ':4.2f')
+    DomCls_losses = AverageMeter('DomCls', ':4.2f')
     progress = ProgressMeter(
         args.iters_per_epoch,
-        [batch_time, data_time, cls_losses, total_losses,cls_accs,stable_cls_losses,unstable_cls_losses, KL_losses,MI_losses, val_accs],
+        [batch_time, data_time, cls_losses, total_losses,cls_accs,stable_cls_losses,unstable_cls_losses, KL_losses,MI_losses,MMD_losses, DomCls_losses,val_accs],
         prefix="Epoch: [{}]".format(epoch)
     )
 
@@ -300,15 +384,17 @@ def CasualOOD_train1(train_source_iter: ForeverDataIterator, val_iter: ForeverDa
         val_minibatches = next(val_iter)  # list of (x, y)
 
         # 将不同 domain 的数据合并
-        img_train = torch.cat([x for x, y in train_minibatches])
-        labels_train = torch.cat([y for x, y in train_minibatches])
+        img_train = torch.cat([d[0] for d in train_minibatches])
+        labels_train = torch.cat([d[1] for d in train_minibatches])
 
-        img_val = torch.cat([x for x, y in val_minibatches])
-        labels_val = torch.cat([y for x, y in val_minibatches])
+        img_val = torch.cat([d[0] for d in val_minibatches])
+        labels_val = torch.cat([d[1] for d in val_minibatches])
 
+        domains_train = torch.cat([d for x, y, d in train_minibatches])
         # 将图像和标签数据移至GPU
         img_train = img_train.to(device)
         labels_train = labels_train.to(device)
+        domains_train= domains_train.to(device)
 
         # 特征提取
         z_u, z_s, u_logits, s_logits, tilde_s_logits,combined_logits = model.encode(img_train)
@@ -318,6 +404,12 @@ def CasualOOD_train1(train_source_iter: ForeverDataIterator, val_iter: ForeverDa
         loss_cls_u = F.cross_entropy(u_logits, labels_train)
         loss_cls_s = F.cross_entropy(tilde_s_logits, labels_train)
         loss_cls = loss_cls_u
+        # === MMD Loss: Encourage z_u independence from domain ===
+        loss_mmd = compute_mmd(z_u, domains_train)
+
+        # === Domain Classification Loss on z_s ===
+        domain_logits = model.domain_classifier(z_s)
+        loss_domain_cls = F.cross_entropy(domain_logits, domains_train)
 
         # 解耦损失（互信息近似）
         if args.mi_type == 'conditional':
@@ -331,9 +423,13 @@ def CasualOOD_train1(train_source_iter: ForeverDataIterator, val_iter: ForeverDa
         log_qz = q_dist.log_prob(s_logits)
         loss_kl = -log_qz.mean()
 
-        # 总损失 = 分类 + KL + 互信息
-        loss = loss_cls + args.decouple_alpha * loss_kl + args.decouple_beta * loss_MI
 
+        # 总损失 = 分类 + KL + 互信息
+        loss = (loss_cls
+                # + args.decouple_alpha * loss_kl
+                + args.decouple_beta * loss_MI
+                + args.mmd_lambda * loss_mmd
+                + args.domain_lambda * loss_domain_cls)
         # 分类准确率
         cls_acc = accuracy(logits, labels_train)[0]
 
@@ -344,7 +440,9 @@ def CasualOOD_train1(train_source_iter: ForeverDataIterator, val_iter: ForeverDa
         cls_accs.update(cls_acc.item(), logits.size(0))
         total_losses.update(loss.item(), logits.size(0))
         KL_losses.update(loss_kl.item(), logits.size(0))
-        MI_losses.update(loss_MI.item(), logits.size(0))
+        MI_losses.update(args.decouple_beta *loss_MI.item(), logits.size(0))
+        MMD_losses.update(args.mmd_lambda * loss_mmd.item(), logits.size(0))
+        DomCls_losses.update(args.domain_lambda *loss_domain_cls.item(), logits.size(0))
 
         # 反向传播
         optimizer.zero_grad()
@@ -418,11 +516,11 @@ def CasualOOD_train2(train_source_iter: ForeverDataIterator, val_iter: ForeverDa
         val_minibatches = next(val_iter)  # list of (x, y)
 
         # 将不同 domain 的数据合并
-        img_train = torch.cat([x for x, y in train_minibatches])
-        labels_train = torch.cat([y for x, y in train_minibatches])
+        img_train = torch.cat([d[0] for d in train_minibatches])
+        labels_train = torch.cat([d[1] for d in train_minibatches])
 
-        img_val = torch.cat([x for x, y in val_minibatches])
-        labels_val = torch.cat([y for x, y in val_minibatches])
+        img_val = torch.cat([d[0] for d in val_minibatches])
+        labels_val = torch.cat([d[1] for d in val_minibatches])
 
         # 将图像和标签数据移至GPU
         img_train = img_train.to(device)
@@ -430,12 +528,6 @@ def CasualOOD_train2(train_source_iter: ForeverDataIterator, val_iter: ForeverDa
 
         # 特征提取
         z_u, z_s, u_logits, s_logits, tilde_s_logits,combined_logits = model.encode(img_train)
-        logits =  combined_logits
-
-        # 各类损失项
-        loss_cls_u = F.cross_entropy(u_logits, labels_train)
-        loss_cls_s = F.cross_entropy(tilde_s_logits, labels_train)
-        loss_cls = F.cross_entropy(logits, labels_train)
         # 分类损失（仅不稳定分支）
         if args.finetune_logits == 'tilde':
             logits = tilde_s_logits
@@ -444,7 +536,12 @@ def CasualOOD_train2(train_source_iter: ForeverDataIterator, val_iter: ForeverDa
         else:
             raise NotImplementedError
 
-        loss = F.cross_entropy(logits, labels_train)
+        # 各类损失项
+        loss_cls_u = F.cross_entropy(u_logits, labels_train)
+        loss_cls_s = F.cross_entropy(tilde_s_logits, labels_train)
+        loss_cls = F.cross_entropy(logits, labels_train)
+
+        loss = loss_cls
 
         # 准确率计算
         cls_acc = accuracy(logits, labels_train)[0]
