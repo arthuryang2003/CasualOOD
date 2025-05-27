@@ -188,8 +188,8 @@ def main(args: argparse.Namespace):
     test_logger = '%s/test.txt' % (args.log)
     print(test_logger)
 
-    if args.phase != 'train':
-        model.load_state_dict(torch.load(logger.get_checkpoint_path('best_model_train1')))
+    # if args.phase != 'train':
+        # model.load_state_dict(torch.load(logger.get_checkpoint_path('best_model_train')))
     if args.phase == 'analysis':
         model.load_state_dict(torch.load(logger.get_checkpoint_path('best_model_test')))
         model.eval()
