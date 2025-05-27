@@ -59,35 +59,82 @@ def main(args: argparse.Namespace):
     else:
         raise NotImplementedError
 
-    # 数据划分
-    train_source_dataset, val_source_dataset, val_target_dataset, test_dataset = [], [], [], []
-    for i, env in enumerate(dataset):
-        if dataset.ENVIRONMENTS[i] in args.source:
-            train_s, val_s = misc.split_dataset(env, int(len(env) * args.source_split_ratio), misc.seed_hash(args.seed, i))
+    train_source_dataset = []
+    train_target_dataset = []
+    val_source_dataset = []
+    val_target_dataset = []
+    source_dataset =[]
+    test_dataset = []
+    for env_i, env in enumerate(dataset):
+
+        if dataset.ENVIRONMENTS[env_i]  in args.source:
+            train_s,val_s = misc.split_dataset(env,
+                                          int(len(env) * args.source_split_ratio),
+                                          misc.seed_hash(args.seed, env_i))
             train_source_dataset.append(train_s)
             val_source_dataset.append(val_s)
-        elif dataset.ENVIRONMENTS[i] in args.target:
-            train_t, val_t = misc.split_dataset(env, int(len(env) * args.target_split_ratio), misc.seed_hash(args.seed, i))
+
+            source_dataset.append(train_s)
+            source_dataset.append(val_s)
+
+        elif dataset.ENVIRONMENTS[env_i]  in args.target:
+            train_t,val_t = misc.split_dataset(env,
+                                                int(len(env) * args.target_split_ratio),
+                                                misc.seed_hash(args.seed, env_i))
+            train_target_dataset.append(train_t)
             val_target_dataset.append(val_t)
+
             test_dataset.append(train_t)
             test_dataset.append(val_t)
 
-    # 数据加载
-    train_source_loader = [InfiniteDataLoader(env, None, args.batch_size, args.workers) for env in train_source_dataset]
-    val_source_loader = [FastDataLoader(env, args.batch_size, args.workers) for env in val_source_dataset]
-    test_loader = [FastDataLoader(env, args.batch_size, args.workers) for env in test_dataset]
+    train_source_loader = [InfiniteDataLoader(
+        dataset=env,  # 这里不需要列表展开
+        weights=None,  # 如果没有特定的 sample 权重，可以设为 None
+        batch_size=args.batch_size,
+        num_workers=args.workers
+    ) for i, env in enumerate(train_source_dataset)]
+
+    train_target_loader = [FastDataLoader(
+        dataset=env,  # 这里不需要列表展开
+        batch_size=args.batch_size,
+        num_workers=args.workers
+    )for i, env in enumerate(train_target_dataset)]
+
+    val_source_loader = [FastDataLoader(
+        dataset=env,  # 这里不需要列表展开
+        batch_size=args.batch_size,
+        num_workers=args.workers
+    ) for i, env in enumerate(val_source_dataset)]
+
+    val_target_loader = [FastDataLoader(
+        dataset=env,  # 这里不需要列表展开
+        batch_size=args.batch_size,
+        num_workers=args.workers
+    )for i, env in enumerate(val_target_dataset)]
+
+    test_loader = [FastDataLoader(
+        dataset=env,  # 这里不需要列表展开
+        batch_size=args.batch_size,
+        num_workers=args.workers
+    )for i, env in enumerate(test_dataset)]
 
     train_source_iter = ForeverDataIterator(train_source_loader)
-    val_source_iter = ForeverDataIterator(val_source_loader)
+    train_target_iter = ForeverDataIterator(train_target_loader)
+
 
     args.num_classes = dataset.num_classes
     backbone = utils.get_model(args.arch, pretrain=not args.scratch)
     model = ERMNet(args, backbone_net=backbone).to(device)
+    # optimizer = torch.optim.Adam(
+    #     model.parameters(),
+    #     lr=args.lr,
+    #     weight_decay=args.weight_decay)
 
     optimizer = SGD(model.get_parameters(), lr=args.lr, momentum=args.momentum, weight_decay=args.weight_decay, nesterov=True)
-    lr_scheduler = LambdaLR(optimizer, lambda x: args.lr * (1. + args.lr_gamma * float(x)) ** (-args.lr_decay))
-
+    # lr_scheduler = LambdaLR(optimizer, lambda x: args.lr * (1. + args.lr_gamma * float(x)) ** (-args.lr_decay))
+    lr_scheduler = LambdaLR(optimizer, lambda x:args.lr)
     test_logger = '%s/test.txt' % (args.log)
+
 
     if args.phase == 'test':
         model.load_state_dict(torch.load(logger.get_checkpoint_path('best_model_train')))
@@ -99,9 +146,9 @@ def main(args: argparse.Namespace):
     total_iter = 0
     for epoch in range(args.train_epochs):
         print("lr:", lr_scheduler.get_last_lr())
-        ERM_train(train_source_iter, val_source_iter, model, optimizer, lr_scheduler, epoch, args, total_iter)
+        ERM_train(train_source_iter, train_target_iter, model, optimizer, lr_scheduler, epoch, args, total_iter)
 
-        acc = utils.validate(val_source_loader, model, args, device)
+        acc = utils.validate(train_target_loader, model, args, device)
         print("Val Acc = {:.4f}".format(acc))
         wandb.log({"ERM Val Acc": acc})
         with open(test_logger, 'a') as f:
@@ -114,7 +161,7 @@ def main(args: argparse.Namespace):
 
     print("Best Val Accuracy: {:.2f}".format(best_acc))
     model.load_state_dict(torch.load(logger.get_checkpoint_path('best_model_train')))
-    test_acc = utils.validate(test_loader, model, args, device)
+    test_acc = utils.validate(val_target_loader, model, args, device)
     print("Test Accuracy = {:.2f}".format(test_acc))
     logger.close()
 

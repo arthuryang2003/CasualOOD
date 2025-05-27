@@ -44,6 +44,9 @@ DATASETS = [
 
     'CelebA_Blond',
     'Waterbirds',
+
+    'NICO_Mixed',
+    'EnhancedColoredMNIST',
 ]
 
 def get_dataset_class(dataset_name):
@@ -52,6 +55,34 @@ def get_dataset_class(dataset_name):
         raise NotImplementedError("Dataset not found: {}".format(dataset_name))
     return globals()[dataset_name]
 
+
+def get_transform(input_size=224):
+    return transforms.Compose([
+        transforms.Resize((input_size, input_size)),
+        transforms.ToTensor(),
+        get_normalize(),
+    ])
+def get_augment_transform(scheme_name='default', input_size=224):
+    schemes = {}
+    schemes['default'] = transforms.Compose([
+        transforms.RandomResizedCrop(input_size, scale=(0.7, 1.0)),
+        transforms.RandomHorizontalFlip(),
+        transforms.ColorJitter(0.3, 0.3, 0.3, 0.3),
+        transforms.RandomGrayscale(),
+        transforms.ToTensor(),
+        get_normalize(),
+    ])
+    schemes['jigen'] = transforms.Compose([
+        transforms.RandomResizedCrop(input_size, scale=(0.8, 1.0)),
+        transforms.RandomHorizontalFlip(),
+        transforms.ColorJitter(0.4, 0.4, 0.4, 0.4),
+        transforms.RandomGrayscale(),
+        transforms.ToTensor(),
+        get_normalize(),
+    ])
+    if scheme_name not in schemes:
+        raise KeyError(f'no such data augmentation scheme: {scheme_name}')
+    return schemes[scheme_name]
 
 def get_normalize():
     return transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
@@ -143,7 +174,62 @@ class CelebA_Blond(MultipleDomainDataset):
         self.input_shape = (3, 224, 224,)
         self.num_classes = 2
 
+class NICO_Mixed_Environment(Dataset):
+    def __init__(self, split_csv, img_root_dir, transform=None,domain_id=0):
+        self.transform = transform
+        self.samples = []
+        self.domain_id = domain_id
 
+        with open(split_csv) as f:
+            reader = csv.reader(f)
+            for img_path, category_name, context_name, superclass in reader:
+                img_path = img_path.replace('\\', '/')
+                img_path = Path(img_root_dir, superclass, img_path)
+                self.samples.append((img_path, {'animal': 0, 'vehicle': 1}[superclass]))
+
+    def __len__(self):
+        return len(self.samples)
+
+    def __getitem__(self, index):
+        img_path, label = self.samples[index]
+        image = Image.open(img_path).convert('RGB')
+        if self.transform:
+            image = self.transform(image)
+        label = torch.tensor(label)
+        return image, label, self.domain_id  # 加入 domain_id
+
+class NICO_Mixed(MultipleDomainDataset):
+    CHECKPOINT_FREQ = 200
+    ENVIRONMENTS = ['train1', 'train2', 'val', 'test']
+    def __init__(self, root, test_envs, args):
+        super().__init__()
+
+        transform = get_transform()
+
+
+        augment_transform = transforms.Compose([
+            transforms.RandomResizedCrop((224, 224), scale=(0.7, 1.0), ratio=(1.0, 4.0/3.0)),
+            transforms.ColorJitter(0.3, 0.3, 0.3, 0.0),
+            transforms.RandomHorizontalFlip(),
+            transforms.ToTensor(),
+            get_normalize(),
+        ])
+
+        self.datasets = []
+        for i, env_name in enumerate(self.ENVIRONMENTS):
+            if args.data_augmentation and (i not in test_envs):
+                env_transform = augment_transform
+            else:
+                env_transform = transform
+            split_csv = Path(root, 'NICO', 'mixed_split_corrected',
+                             f'env_{env_name}.csv')
+            dataset = NICO_Mixed_Environment(split_csv, Path(root, 'NICO'),
+                                             env_transform,domain_id=i)
+            self.datasets.append(dataset)
+
+        self.input_shape = (3, 224, 224,)
+        self.num_classes = 2  # animal or vehicle
+        
 class Waterbirds_Environment(Dataset):
     def __init__(self, split_csv, img_dir, transform=None, domain_id=0):
         self.img_dir = img_dir
@@ -314,6 +400,65 @@ class ColoredMNIST(MultipleDomainDataset):
     def torch_xor_(self, a, b):
         return (a - b).abs()
 
+
+class EnhancedColoredMNIST(MultipleDomainDataset):
+    ENVIRONMENTS = ['+90%', '+80%', '-90%']
+
+    def __init__(self, root, target, args):
+        super().__init__()
+
+        # 定义环境对应的 spurious correlation 概率
+        environments = [0.1, 0.2, 0.9]
+
+        # 加载 MNIST 数据集
+        original_dataset_tr = MNIST(root, train=True, download=True)
+        original_dataset_te = MNIST(root, train=False, download=True)
+        original_images = torch.cat((original_dataset_tr.data, original_dataset_te.data))
+        original_labels = torch.cat((original_dataset_tr.targets, original_dataset_te.targets))
+
+        # 打乱数据顺序
+        shuffle = torch.randperm(len(original_images))
+        original_images = original_images[shuffle]
+        original_labels = original_labels[shuffle]
+
+        self.datasets = []
+        for i, env in enumerate(environments):
+            images = original_images[i::len(environments)]
+            labels = original_labels[i::len(environments)]
+            dataset = self.color_dataset(images, labels, env, domain_id=i)
+            self.datasets.append(dataset)
+
+        self.input_shape = (2, 28, 28)
+        self.num_classes = 2
+
+    def color_dataset(self, images, labels, environment_prob, domain_id):
+        # 标签二值化
+        labels = (labels < 5).float()
+
+        # 标签以 25% 概率翻转
+        labels = self.torch_xor_(labels, self.torch_bernoulli_(0.25, len(labels)))
+
+        # 决定颜色通道：高相关但环境中会按概率翻转
+        colors = self.torch_xor_(labels, self.torch_bernoulli_(environment_prob, len(labels)))
+
+        # 构建双通道图像
+        images = torch.stack([images, images], dim=1)  # 变为 [N, 2, 28, 28]
+        # 将不属于颜色通道的那一维置为 0
+        images[torch.arange(len(images)), (1 - colors).long(), :, :] *= 0
+
+        # 标准化图像
+        x = images.float().div_(255.0)
+        y = labels.view(-1).long()
+        domain = torch.full_like(y, fill_value=domain_id, dtype=torch.long)
+        colour = colors.view(-1).long()
+
+        return TensorDataset(x, y, domain, colour)
+
+    def torch_bernoulli_(self, p, size):
+        return (torch.rand(size) < p).float()
+
+    def torch_xor_(self, a, b):
+        return (a - b).abs()
 
 class RotatedMNIST(MultipleEnvironmentMNIST):
     ENVIRONMENTS = ['0', '15', '30', '45', '60', '75']

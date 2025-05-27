@@ -145,7 +145,7 @@ def CasualOOD_train(train_source_iter: ForeverDataIterator, val_iter: ForeverDat
         img_val = torch.cat([d[0] for d in val_minibatches])
         labels_val = torch.cat([d[1] for d in val_minibatches])
 
-        domains_train = torch.cat([d for x, y, d in train_minibatches])
+        domains_train = torch.cat([d[2] for d in train_minibatches])
 
         # 将图像和标签数据移至GPU
         img_train = img_train.to(device)
@@ -166,7 +166,7 @@ def CasualOOD_train(train_source_iter: ForeverDataIterator, val_iter: ForeverDat
 
         elif args.loss_selection_mode == "concat":
 
-            loss_cls = F.cross_entropy(logits, labels_train)
+            loss_cls = loss_cls_u+F.cross_entropy(logits, labels_train)
 
         else:
             raise ValueError(f"Unsupported loss_selection_mode: {args.loss_selection_mode}")
@@ -390,7 +390,7 @@ def CasualOOD_train1(train_source_iter: ForeverDataIterator, val_iter: ForeverDa
         img_val = torch.cat([d[0] for d in val_minibatches])
         labels_val = torch.cat([d[1] for d in val_minibatches])
 
-        domains_train = torch.cat([d for x, y, d in train_minibatches])
+        domains_train = torch.cat([d[2] for d in train_minibatches])
         # 将图像和标签数据移至GPU
         img_train = img_train.to(device)
         labels_train = labels_train.to(device)
@@ -426,7 +426,7 @@ def CasualOOD_train1(train_source_iter: ForeverDataIterator, val_iter: ForeverDa
 
         # 总损失 = 分类 + KL + 互信息
         loss = (loss_cls
-                # + args.decouple_alpha * loss_kl
+                + args.decouple_alpha * loss_kl
                 + args.decouple_beta * loss_MI
                 + args.mmd_lambda * loss_mmd
                 + args.domain_lambda * loss_domain_cls)
@@ -517,11 +517,12 @@ def CasualOOD_train2(train_source_iter: ForeverDataIterator, val_iter: ForeverDa
 
         # 将不同 domain 的数据合并
         img_train = torch.cat([d[0] for d in train_minibatches])
-        labels_train = torch.cat([d[1] for d in train_minibatches])
+        # labels_train = torch.cat([d[1] for d in train_minibatches])
+        labels_train = torch.cat([d[3] for d in train_minibatches])
 
         img_val = torch.cat([d[0] for d in val_minibatches])
-        labels_val = torch.cat([d[1] for d in val_minibatches])
-
+        # labels_val = torch.cat([d[1] for d in val_minibatches])
+        labels_val = torch.cat([d[3] for d in val_minibatches])
         # 将图像和标签数据移至GPU
         img_train = img_train.to(device)
         labels_train = labels_train.to(device)
@@ -681,7 +682,7 @@ def IRM_train(train_source_iter: ForeverDataIterator, val_iter: ForeverDataItera
         x = torch.cat([d[0] for d in minibatches]).to(device)
         y = torch.cat([d[1] for d in minibatches]).to(device)
 
-        loss, nll, penalty = model.get_penalized_loss(x, y)
+        loss, nll, penalty = model.get_penalized_loss(minibatches)
 
         optimizer.zero_grad()
         loss.backward()

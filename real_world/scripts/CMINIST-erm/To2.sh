@@ -6,7 +6,7 @@ WANDB_MODE=disabled CUDA_VISIBLE_DEVICES=${device[0]} python ../../ERM.py --data
 -s '+90%','-90%' -t'+80%' -a lenet \
 --name=test_To_3 \
 --z_dim=32 --hidden_dim=128 \
--i=1000 \
+-i=100 \
 --seed=${seed[i]} \
 --train_epochs=20 \
 --finetune_epochs=10 \

@@ -172,7 +172,7 @@ def main(args: argparse.Namespace):
     #     model.load_state_dict(torch.load(logger.get_checkpoint_path('best_model_test')))
 
     if args.phase == 'analysis':
-        model.load_state_dict(torch.load(logger.get_checkpoint_path('best_model_test')))
+        model.load_state_dict(torch.load(logger.get_checkpoint_path('latest_model')))
         model.eval()
         print("==> Running GradCAM analysis on disentangled features...")
 
@@ -541,6 +541,9 @@ if __name__ == '__main__':
     parser.add_argument('--domain_lambda', type=float, default=1.0, help='Domain classifier loss weight')
     parser.add_argument('--loss_selection_mode', type=str, default="add", choices=["add", "concat"],
                         help="How to compute classification loss: add or concat logits")
+
+    parser.add_argument('--shared_classifier', action='store_true',
+                        help='Whether to use a shared classifier for all predictions')
 
 
     args = parser.parse_args()

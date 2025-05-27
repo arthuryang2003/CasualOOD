@@ -295,12 +295,12 @@ def validate_slogits(val_loader, model, args, device) -> float:
     val_iter = chain(*val_loader)  # <-- 这里拼接
     with torch.no_grad():
         end = time.time()
-        for i, (images, target)  in enumerate(val_iter):
+        for i, data in enumerate(val_iter):
 
             # images = torch.cat([b[0] for b in data], dim=0).to(device)
             # target = torch.cat([b[1] for b in data], dim=0).to(device)
-            images = images.to(device)
-            target = target.to(device)
+            images = data[0].to(device)
+            target = data[1].to(device)
 
             z_u, z_s, u_logits, s_logits, tilde_s_logits,combined_logits = model.encode(images)
 

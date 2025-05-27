@@ -46,6 +46,8 @@ class CasualOOD(nn.Module):
             nn.ReLU()
         )  # Spurious features
 
+        self.shared_classifier = args.shared_classifier
+
         # Classifiers for stable (content) and unstable (style) features
         self.classifier_u = nn.Sequential(
             nn.Linear(self.c_dim, dim),
@@ -165,20 +167,22 @@ class CasualOOD(nn.Module):
         return logits
 
     def predict_u(self, z_u):
-        u_logits = self.classifier(z_u)
-        # u_logits = self.classifier_u(z_u)
-        return u_logits
+        if self.shared_classifier:
+            return self.classifier(z_u)
+        else:
+            return self.classifier_u(z_u)
 
     def predict_s(self, z_s):
-        s_logits = self.classifier(z_s)
-        # s_logits = self.classifier_s(z_s)
-        return s_logits
+        if self.shared_classifier:
+            return self.classifier(z_s)
+        else:
+            return self.classifier_s(z_s)
 
     def predict_tilde_s(self, tilde_z_s):
-        tilde_s_logits = self.classifier(tilde_z_s)
-        # tilde_s_logits = self.classifier_tilde_s(tilde_z_s)
-        return tilde_s_logits
-
+        if self.shared_classifier:
+            return self.classifier(tilde_z_s)
+        else:
+            return self.classifier_tilde_s(tilde_z_s)
     def drop_spurious_features(self, z_s):
         mask = torch.sigmoid(self.mask)
         drop_z_s = (1 - mask) * z_s
@@ -317,6 +321,9 @@ class ERMNet(nn.Module):
         )
 
     def forward(self, x):
+        for name, param in self.named_parameters():
+            if torch.isnan(param).any() or torch.isinf(param).any():
+                print(f"Param {name} has NaN or Inf")
         feat = self.backbone(x)
         out = self.classifier(feat)
         return out
@@ -341,27 +348,51 @@ class IRMNet(ERMNet):
         super(IRMNet, self).__init__(args, backbone_net)
         self.update_count = 0
         # 设置默认 IRM 参数（如果 args 中没有定义）
-        self.irm_lambda = getattr(args, 'irm_lambda', 1.0)
+        self.irm_lambda = getattr(args, 'irm_lambda', 100)
         self.irm_anneal_iters = getattr(args, 'irm_anneal_iters', 500)
+
 
     def irm_penalty(self, logits, y):
         device = logits.device
         scale = torch.tensor(1.).to(device).requires_grad_()
+
         loss_1 = F.cross_entropy(logits[::2] * scale, y[::2])
         loss_2 = F.cross_entropy(logits[1::2] * scale, y[1::2])
         grad_1 = autograd.grad(loss_1, [scale], create_graph=True)[0]
         grad_2 = autograd.grad(loss_2, [scale], create_graph=True)[0]
         return torch.sum(grad_1 * grad_2)
 
-    def get_penalized_loss(self, x,y):
-        logits = self.forward(x)
-        batch_size = x.size(0)
-        assert batch_size % 2 == 0, "IRM penalty 计算需要偶数样本（交叉组合）"
-
-        nll = F.cross_entropy(logits, y)
-        penalty = self.irm_penalty(logits, y)
-
+    def get_penalized_loss(self, minibatches_with_domain):
+        """
+        minibatches_with_domain: List of (x, y, domain_id)
+        """
         penalty_weight = self.irm_lambda if self.update_count >= self.irm_anneal_iters else 1.0
+
+        nll = 0.0
+        penalty = 0.0
+
+        # 拆分 x, y
+        all_x = torch.cat([x for (x, y, _) in minibatches_with_domain])
+        all_x = all_x.to(next(self.parameters()).device)
+        assert not torch.isnan(all_x).any(), "Input x contains NaN"
+        all_logits = self.forward(all_x)
+        assert not torch.isnan(all_logits).any(), "logits contains NaN"
+
+        # 分批计算 IRM penalty
+        all_logits_idx = 0
+        for x, y, _ in minibatches_with_domain:
+
+            logits = all_logits[all_logits_idx:all_logits_idx + x.size(0)]
+            all_logits_idx += x.size(0)
+            y = y.to(logits.device)
+
+            nll += F.cross_entropy(logits, y)
+            penalty += self.irm_penalty(logits, y)
+
+        nll /= len(minibatches_with_domain)
+        penalty /= len(minibatches_with_domain)
         total_loss = nll + penalty_weight * penalty
+
+        self.update_count += 1
 
         return total_loss, nll.item(), penalty.item()

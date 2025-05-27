@@ -72,6 +72,7 @@ def main(args: argparse.Namespace):
     train_target_dataset = []
     val_source_dataset = []
     val_target_dataset = []
+    source_dataset =[]
     test_dataset = []
     for env_i, env in enumerate(dataset):
 
@@ -81,6 +82,9 @@ def main(args: argparse.Namespace):
                                           misc.seed_hash(args.seed, env_i))
             train_source_dataset.append(train_s)
             val_source_dataset.append(val_s)
+
+            source_dataset.append(train_s)
+            source_dataset.append(val_s)
 
         elif dataset.ENVIRONMENTS[env_i]  in args.target:
             train_t,val_t = misc.split_dataset(env,
@@ -92,6 +96,12 @@ def main(args: argparse.Namespace):
             test_dataset.append(train_t)
             test_dataset.append(val_t)
 
+    train_loader = [InfiniteDataLoader(
+        dataset=env,  # 这里不需要列表展开
+        weights=None,  # 如果没有特定的 sample 权重，可以设为 None
+        batch_size=args.batch_size,
+        num_workers=args.workers
+    ) for i, env in enumerate(source_dataset)]
 
     train_source_loader = [InfiniteDataLoader(
         dataset=env,  # 这里不需要列表展开
@@ -106,6 +116,13 @@ def main(args: argparse.Namespace):
         batch_size=args.batch_size,
         num_workers=args.workers
     )for i, env in enumerate(train_target_dataset)]
+
+    val_train_loader = [FastDataLoader(
+        dataset=env,  # 这里不需要列表展开
+        batch_size=args.batch_size,
+        num_workers=args.workers
+    )for i, env in enumerate(train_target_dataset)]
+
 
     val_source_loader = [FastDataLoader(
         dataset=env,  # 这里不需要列表展开
@@ -124,11 +141,13 @@ def main(args: argparse.Namespace):
         batch_size=args.batch_size,
         num_workers=args.workers
     )for i, env in enumerate(test_dataset)]
-
+    train_iter = ForeverDataIterator(train_loader)
+    test_iter = ForeverDataIterator(test_loader)
     train_source_iter = ForeverDataIterator(train_source_loader)
     val_source_iter = ForeverDataIterator(val_source_loader)
     val_target_iter = ForeverDataIterator(val_target_loader)
     train_target_iter = ForeverDataIterator(train_target_loader)
+
 
     args.num_classes=dataset.num_classes
     # 通过目标数据集计算类别数量
@@ -143,7 +162,8 @@ def main(args: argparse.Namespace):
                     lr=args.lr, momentum=args.momentum, weight_decay=args.weight_decay, nesterov=True)
 
     print(phase1_optimizer.param_groups[0]['lr'], ' *** lr')
-    phase1_lr_scheduler = LambdaLR(phase1_optimizer, lambda x:  args.lr * (1. + args.lr_gamma * float(x)) ** (-args.lr_decay))
+    # phase1_lr_scheduler = LambdaLR(phase1_optimizer, lambda x:  args.lr * (1. + args.lr_gamma * float(x)) ** (-args.lr_decay))
+    phase1_lr_scheduler = LambdaLR(phase1_optimizer, lambda x: args.lr)
     print(phase1_optimizer.param_groups[0]['lr'], ' *** lr')
 
     # define optimizer and lr scheduler
@@ -151,7 +171,8 @@ def main(args: argparse.Namespace):
                     lr=args.lr, momentum=args.momentum, weight_decay=args.weight_decay, nesterov=True)
 
     print(phase2_optimizer.param_groups[0]['lr'], ' *** lr')
-    phase2_lr_scheduler = LambdaLR(phase2_optimizer, lambda x:  args.lr * (1. + args.lr_gamma * float(x)) ** (-args.lr_decay))
+    # phase2_lr_scheduler = LambdaLR(phase2_optimizer, lambda x:  args.lr * (1. + args.lr_gamma * float(x)) ** (-args.lr_decay))
+    phase2_lr_scheduler = LambdaLR(phase2_optimizer, lambda x: args.lr)
     print(phase2_optimizer.param_groups[0]['lr'], ' *** lr')
 
     # define finetune optimizer and lr scheduler
@@ -159,7 +180,8 @@ def main(args: argparse.Namespace):
                     lr=args.lr, momentum=args.momentum, weight_decay=args.weight_decay, nesterov=True)
 
     print(finetune_optimizer.param_groups[0]['lr'], ' *** lr')
-    finetune_lr_scheduler = LambdaLR(finetune_optimizer, lambda x:  args.lr * (1. + args.lr_gamma * float(x)) ** (-args.lr_decay))
+    # finetune_lr_scheduler = LambdaLR(finetune_optimizer, lambda x:  args.lr * (1. + args.lr_gamma * float(x)) ** (-args.lr_decay))
+    finetune_lr_scheduler = LambdaLR(finetune_optimizer, lambda x: args.lr)
     print(finetune_optimizer.param_groups[0]['lr'], ' *** lr')
 
 
@@ -169,7 +191,7 @@ def main(args: argparse.Namespace):
     if args.phase != 'train':
         model.load_state_dict(torch.load(logger.get_checkpoint_path('best_model_train1')))
     if args.phase == 'analysis':
-        model.load_state_dict(torch.load(logger.get_checkpoint_path('best_model_train1')))
+        model.load_state_dict(torch.load(logger.get_checkpoint_path('best_model_test')))
         model.eval()
         print("==> Running GradCAM analysis on disentangled features...")
 
@@ -219,14 +241,20 @@ def main(args: argparse.Namespace):
 
         test_iter = ForeverDataIterator(test_loader)
         while len(selected_samples[0]) < max_per_class or len(selected_samples[1]) < max_per_class:
-            data, labels,_ = next(test_iter)[0]
+            batch = next(test_iter)
+            print("==> reading data...")
+
+            data = torch.cat([d[0] for d in batch])
+            labels = torch.cat([d[1] for d in batch])
             data, labels = data.to(device), labels.to(device)
 
             # 保证梯度追踪
             data.requires_grad_()
-            z_u, z_s, *_ = model.encode(data)
-            logit_u = model.predict_u(z_u)
-            pred_u = logit_u.argmax(dim=1)
+            z_u, z_s, u_logits,*_ = model.encode(data)
+            pred_hard=F.softmax(u_logits,dim=1)
+            pred_u = torch.argmax(pred_hard,dim=1)
+
+
 
             for i in range(data.size(0)):
                 label = labels[i].item()
@@ -277,8 +305,8 @@ def main(args: argparse.Namespace):
                 axs[2].set_title(f"GradCAM: z_s({class_idx_s})")
                 axs[3].imshow(heatmap_tilde_s)
                 axs[3].set_title(f"GradCAM: z_s'({class_idx_t})")
-                axs[4].imshow(heatmap_diff)
-                axs[4].set_title(f"GradCAM: drop_z_s({class_idx_drop})")
+                # axs[4].imshow(heatmap_diff)
+                # axs[4].set_title(f"GradCAM: drop_z_s({class_idx_drop})")
 
                 for ax in axs:
                     ax.axis('off')
@@ -308,14 +336,16 @@ def main(args: argparse.Namespace):
         for epoch in range(args.finetune_epochs):
             print("lr:", finetune_lr_scheduler.get_last_lr(), finetune_optimizer.param_groups[0]['lr'])
             # train for one epoch
-            CasualOOD_finetune(train_target_iter, val_target_iter, model, finetune_optimizer,
+            CasualOOD_finetune(train_target_iter, train_target_iter, model, finetune_optimizer,
                                finetune_lr_scheduler, epoch, args, total_iter, backbone)
 
             # evaluate on validation set
-            acc2 = combined_inference(model, val_target_loader, num_classes)
-            acc3 = utils.validate(val_target_loader, model, args, device)
+            acc3 = combined_inference(model, val_train_loader, num_classes)
+            acc2 = utils.validate(val_train_loader, model, args, device)
             print("acc2 = {:3.4f}".format(acc2))
             print("acc3 = {:3.4f}".format(acc3))
+            if args.use_combined_inference:
+                acc2 = acc3
             wandb.log({"Model Val Acc": acc2})
             message = '(epoch %d): Model Val Acc %.3f' % (epoch + 1, acc2)
             print(message)
@@ -333,32 +363,35 @@ def main(args: argparse.Namespace):
         print("best_acc2 = {:3.4f}".format(best_acc2))
         # evaluate on test set
         model.load_state_dict(torch.load(logger.get_checkpoint_path('best_model_test')))
-        acc2 = combined_inference(model, test_loader, num_classes)
-        acc3 = utils.validate(test_loader, model, args, device)
+        acc3 = combined_inference(model, val_target_loader, num_classes)
+        acc2 = utils.validate(val_target_loader, model, args, device)
         print("acc3 = {:3.4f}".format(acc3))
+        if args.use_combined_inference:
+            acc2 = acc3
         print("Test Phase Best test_acc = {:3.2f}".format(acc2))
-
-        acc3 = utils.validate_ulogits(test_loader, model, args, device)
+        acc3 = utils.validate_ulogits(val_target_loader, model, args, device)
         print("base acc = {:3.4f}".format(acc3))
-
-        logger.close()
 
         return
 
 
 
     model.set_requires_grad_phase1()
-    # start training
+    # start phase 1 training
     total_iter = 0
     best_acc1=0.
     for epoch in range(args.train_epochs):
         print("lr:", phase1_lr_scheduler.get_last_lr(), phase1_optimizer.param_groups[0]['lr'])
         # train for one epoch
-        CasualOOD_train1(train_source_iter, val_source_iter, model, phase1_optimizer,
+        CasualOOD_train1(train_source_iter, train_target_iter, model, phase1_optimizer,
               phase1_lr_scheduler, epoch, args, total_iter, backbone)
 
         # evaluate on validation set
-        acc1 = utils.validate_ulogits(val_source_loader, model, args, device)
+        if args.model_selection == "IID":
+            acc1 = utils.validate_ulogits(val_source_loader, model, args, device)
+        else:
+            acc1 = utils.validate_ulogits(val_train_loader, model, args, device)
+
         print("phase 1 acc1 = {:3.4f}".format(acc1))
         wandb.log({"Model phase 1 Val Acc": acc1})
         message = '(epoch %d): Model phase 1 Val Acc %.3f' % (epoch+1, acc1)
@@ -377,26 +410,26 @@ def main(args: argparse.Namespace):
     print("best_acc1 = {:3.4f}".format(best_acc1))
     # evaluate on test set
     model.load_state_dict(torch.load(logger.get_checkpoint_path('best_model_train1')))
-    acc1 = utils.validate_ulogits(test_loader, model, args,device)
+    acc1 = utils.validate_ulogits(val_target_loader, model, args,device)
     print("Train Phase 1 Best test_acc1 = {:3.2f}".format(acc1))
-
-    acc3 = utils.validate_ulogits(test_loader, model, args, device)
-    print("base acc = {:3.4f}".format(acc3))
 
 
 
     model.set_requires_grad_phase2()
-    # start training
+    # start phase 2 training
     total_iter = 0
     best_acc1=0.
     for epoch in range(args.finetune_epochs):
         print("lr:", phase2_lr_scheduler.get_last_lr(), phase2_optimizer.param_groups[0]['lr'])
         # train for one epoch
-        CasualOOD_train2(train_source_iter, val_source_iter, model, phase2_optimizer,
+        CasualOOD_train2(train_source_iter, train_target_iter, model, phase2_optimizer,
               phase2_lr_scheduler, epoch, args, total_iter, backbone)
 
         # evaluate on validation set
-        acc1 = utils.validate(val_source_loader, model, args, device)
+        if args.model_selection == "IID":
+            acc1 = utils.validate(val_source_loader, model, args, device)
+        else:
+            acc1 = utils.validate(test_loader, model, args, device)
         print("phase 2 acc1 = {:3.4f}".format(acc1))
         wandb.log({"Model phase 2 Val Acc": acc1})
         message = '(epoch %d): Model phase 2 Val Acc %.3f' % (epoch+1, acc1)
@@ -415,10 +448,15 @@ def main(args: argparse.Namespace):
     print("best_acc1 = {:3.4f}".format(best_acc1))
     # evaluate on test set
     model.load_state_dict(torch.load(logger.get_checkpoint_path('best_model_train2')))
-    acc1 = utils.validate(test_loader, model, args,device)
+
+    acc1 = utils.validate(val_target_loader, model, args,device)
+
+    acc3 = combined_inference(model, val_train_loader, num_classes)
+    print("combined acc3 = {:3.4f}".format(acc3))
+
     print("Train Phase 2 Best test_acc1 = {:3.2f}".format(acc1))
 
-    acc3 = utils.validate_ulogits(test_loader, model, args, device)
+    acc3 = utils.validate_ulogits(val_target_loader, model, args, device)
     print("base acc = {:3.4f}".format(acc3))
 
     model.set_requires_grad(False)
@@ -429,14 +467,16 @@ def main(args: argparse.Namespace):
     for epoch in range(args.finetune_epochs):
         print("lr:", finetune_lr_scheduler.get_last_lr(), finetune_optimizer.param_groups[0]['lr'])
         # train for one epoch
-        CasualOOD_finetune(train_target_iter, val_target_iter, model, finetune_optimizer,
+        CasualOOD_finetune(train_target_iter, train_target_iter, model, finetune_optimizer,
                         finetune_lr_scheduler, epoch, args, total_iter, backbone)
 
         # evaluate on validation set
-        acc3 = combined_inference(model, val_target_loader, num_classes)
-        acc2 = utils.validate(val_target_loader, model, args, device)
+        acc3 = combined_inference(model, val_train_loader, num_classes)
+        acc2 = utils.validate(val_train_loader, model, args, device)
         print("acc2 = {:3.4f}".format(acc2))
         print("acc3 = {:3.4f}".format(acc3))
+        if args.use_combined_inference:
+            acc2=acc3
         wandb.log({"Model Val Acc": acc2})
         message = '(epoch %d): Model Val Acc %.3f' % (epoch+1, acc2)
         print(message)
@@ -454,12 +494,13 @@ def main(args: argparse.Namespace):
     print("best_acc2 = {:3.4f}".format(best_acc2))
     # evaluate on test set
     model.load_state_dict(torch.load(logger.get_checkpoint_path('best_model_test')))
-    acc3 = combined_inference(model, test_loader, num_classes)
-    acc2 = utils.validate(test_loader, model, args, device)
+    acc3 = combined_inference(model, val_target_loader, num_classes)
+    acc2 = utils.validate(val_target_loader, model, args, device)
     print("acc3 = {:3.4f}".format(acc3))
+    if args.use_combined_inference:
+        acc2 = acc3
     print("Test Phase Best test_acc = {:3.2f}".format(acc2))
-
-    acc3 = utils.validate_ulogits(test_loader, model, args, device)
+    acc3 = utils.validate_ulogits(val_target_loader, model, args, device)
     print("base acc = {:3.4f}".format(acc3))
 
     logger.close()
@@ -475,11 +516,11 @@ if __name__ == '__main__':
     #                     help='dataset: ' + ' | '.join(utils.get_dataset_names()) +
     #                          ' (default: PACS)')
 
-    parser.add_argument('--dataset', type=str, default="ColoredMNIST")
+    parser.add_argument('--dataset', type=str, default="NICO_Mixed")
     parser.add_argument('--data_dir', type=str, default='./data')
 
-    parser.add_argument('-s', '--source', help='source domain(s)', default='+90%,+80%')
-    parser.add_argument('-t', '--target', help='target domain(s)', default='-90%')
+    parser.add_argument('-s', '--source', help='source domain(s)', default='train1,train2')
+    parser.add_argument('-t', '--target', help='target domain(s)', default='test')
     parser.add_argument('--train-resizing', type=str, default='default')
     parser.add_argument('--val-resizing', type=str, default='default')
     parser.add_argument('--resize-size', type=int, default=224,
@@ -536,7 +577,7 @@ if __name__ == '__main__':
                         help='whether output per-class accuracy during evaluation')
     parser.add_argument("--log", type=str, default='logs',
                         help="Where to save logs, checkpoints and debugging images.")
-    parser.add_argument("--phase", type=str, default='analysis', choices=['train', 'test', 'analysis'],
+    parser.add_argument("--phase", type=str, default='train', choices=['train', 'test', 'analysis'],
                         help="When phase is 'test', only test the model."
                              "When phase is 'analysis', only analysis the model.")
     # 模型超参数
@@ -576,6 +617,11 @@ if __name__ == '__main__':
 
     parser.add_argument('--shared_classifier', action='store_true',
                         help='Use a shared classifier for all feature branches')
+    parser.add_argument('--model_selection', type=str, default='OOD', choices=['IID', 'OOD'],
+                        help="Choose validation strategy for model selection: IID (val_source) or OOD (train_target)")
+
+    parser.add_argument('--use_combined_inference', action='store_true',
+                        help="Use combined inference (involving z_u and tilde_z_s) instead of vanilla logits")
 
     args = parser.parse_args()
     model_id = f"{args.dataset}_{args.target}/{args.name}"
