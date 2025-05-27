@@ -391,6 +391,10 @@ def CasualOOD_train1(train_source_iter: ForeverDataIterator, val_iter: ForeverDa
         labels_val = torch.cat([d[1] for d in val_minibatches])
 
         domains_train = torch.cat([d[2] for d in train_minibatches])
+
+
+        # labels_colour = torch.cat([d[3] for d in train_minibatches]).to(device)
+
         # 将图像和标签数据移至GPU
         img_train = img_train.to(device)
         labels_train = labels_train.to(device)
@@ -426,7 +430,7 @@ def CasualOOD_train1(train_source_iter: ForeverDataIterator, val_iter: ForeverDa
 
         # 总损失 = 分类 + KL + 互信息
         loss = (loss_cls
-                + args.decouple_alpha * loss_kl
+                # + args.decouple_alpha * loss_kl
                 + args.decouple_beta * loss_MI
                 + args.mmd_lambda * loss_mmd
                 + args.domain_lambda * loss_domain_cls)
@@ -517,12 +521,12 @@ def CasualOOD_train2(train_source_iter: ForeverDataIterator, val_iter: ForeverDa
 
         # 将不同 domain 的数据合并
         img_train = torch.cat([d[0] for d in train_minibatches])
-        # labels_train = torch.cat([d[1] for d in train_minibatches])
-        labels_train = torch.cat([d[3] for d in train_minibatches])
+        labels_train = torch.cat([d[1] for d in train_minibatches])
+        # labels_train = torch.cat([d[3] for d in train_minibatches])
 
         img_val = torch.cat([d[0] for d in val_minibatches])
-        # labels_val = torch.cat([d[1] for d in val_minibatches])
-        labels_val = torch.cat([d[3] for d in val_minibatches])
+        labels_val = torch.cat([d[1] for d in val_minibatches])
+        # labels_val = torch.cat([d[3] for d in val_minibatches])
         # 将图像和标签数据移至GPU
         img_train = img_train.to(device)
         labels_train = labels_train.to(device)
